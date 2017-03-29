@@ -36,7 +36,7 @@ namespace {
 
 char PRE::ID = 0;
 static RegisterPass<PRE> X("pre",
-			    "Partial Redundancy Elimination",
+			    "Partial Redundancy Elimination (CS526)",
 			    false /* does not modify the CFG */,
 			    false /* transformation, not just analysis */);
 
