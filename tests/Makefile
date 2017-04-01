@@ -19,7 +19,7 @@ LLC = ${LLVM_DIR}/bin/llc
 # OPTS = -load $(PRE_LIB) -inline -globaldce -instcombine -argpromotion -scalarrepl-ywang189 -sccp -instcombine -dce -simplifycfg -globaldce -verify
 # OPTS = -load $(PRE_LIB) -inline -globaldce -scalarrepl-ywang189 -sccp -instcombine -dce -simplifycfg -globaldce -verify
 # OPTS = -load $(PRE_LIB) -scalarrepl-ywang189
-OPTS = -load $(PRE_LIB) -reassociate -gvn
+OPTS = -load $(PRE_LIB) # -reassociate -gvn
 
 # Make a .ll file from a .bc file, using llvm-dis
 %.ll: %.bc
