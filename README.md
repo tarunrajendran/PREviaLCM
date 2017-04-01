@@ -1,17 +1,17 @@
 # PREviaLCM
 
 ## Setup  
-link files in `lib/CodeGen/*.cpp` to `llvm/lib/CodeGen/` folder (you need to use absolute path).
-
+1. Clone repo into lib/Transforms/ in llvm source
+2. Add following into lib/Transforms/CMakeLists.txt
 ```
-ln -s lib/CodeGen/\*.cpp llvm/lib/CodeGen
+add_subdirectory(PREviaLCM)
 ```
 
 
 ## Procedures
 1. Get all terms `T`.
 2. Get all variables `V`.
-1. Get Partial Redundant Expressions. Get `T'`
-2. Calculate D-Safe for each expression (term)
-3. Calculate Earliest for each expression (term)
-4. Perform the Safe-Earliest Transformation
+3. Get Partial Redundant Expressions. Get `T'`
+4. Calculate D-Safe for each expression (term)
+5. Calculate Earliest for each expression (term)
+6. Perform the Safe-Earliest Transformation
