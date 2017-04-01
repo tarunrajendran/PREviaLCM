@@ -4,7 +4,7 @@
 
 # on my local machine (Mac)
 LLVM_DIR = /Users/wangyiyi/百度云同步盘/Github/CS426_Unit_Project/llvm/build
-PRE_LIB = ${LLVM_DIR}/lib/LLVMPRE.dylib
+PRE_LIB = ${LLVM_DIR}/lib/PREviaLCM.dylib
 
 # on ews
 # LLVM_DIR = /class/cs526/sp17-projects/ywang189/llvm/build
@@ -29,9 +29,15 @@ OPTS = -load $(PRE_LIB) -reassociate -gvn
 # all optimizations turned off.
 # without running ScalarRepl pass
 %.bc: %.c
-	$(CC) -c -O0 -emit-llvm $< -o - | $(OPT) > $@
+	$(CC) -c -O0 -emit-llvm $< -o - | $(OPT) $(OPTS) > $@
 
 %.s: %.bc
+	$(LLC) < $< > $@
+
+%-pre.bc: %.c
+	$(CC) -c -O0 -emit-llvm $< -o - | $(OPT) $(OPTS) -pre > $@
+
+%-pre.s: %-pre.bc
 	$(LLC) < $< > $@
 
 %.exe: %.s
