@@ -2,8 +2,8 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// This file was developed by the Owen Anderson and is distributed under
-// the University of Illinois Open Source License. See LICENSE.TXT for details.
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -12,26 +12,31 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "gvn"
-
+#define DEBUG_TYPE "pre-gvn"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/BasicBlock.h"
-#include "llvm/Constants.h"
-#include "llvm/DerivedTypes.h"
-#include "llvm/Function.h"
-#include "llvm/Instructions.h"
-#include "llvm/Value.h"
-#include "llvm/Analysis/Dominators.h"
-#include "llvm/ADT/BitVector.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
-#include "llvm/Support/CFG.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
+#include <list>
 using namespace llvm;
+
+STATISTIC(NumGVNInstr, "Number of instructions deleted");
+STATISTIC(NumGVNLoad, "Number of loads deleted");
 
 //===----------------------------------------------------------------------===//
 //                         ValueTable Class
@@ -51,7 +56,7 @@ namespace {
                             FCMPULT, FCMPULE, FCMPUNE, EXTRACT, INSERT,
                             SHUFFLE, SELECT, TRUNC, ZEXT, SEXT, FPTOUI,
                             FPTOSI, UITOFP, SITOFP, FPTRUNC, FPEXT,
-                            PTRTOINT, INTTOPTR, BITCAST, GEP, EMPTY,
+                            PTRTOINT, INTTOPTR, BITCAST, GEP, CALL, EMPTY,
                             TOMBSTONE };
 
     ExpressionOpcode opcode;
@@ -60,6 +65,7 @@ namespace {
     uint32_t secondVN;
     uint32_t thirdVN;
     SmallVector<uint32_t, 4> varargs;
+    Value* function;
 
     Expression() { }
     Expression(ExpressionOpcode o) : opcode(o) { }
@@ -70,6 +76,8 @@ namespace {
       else if (opcode == EMPTY || opcode == TOMBSTONE)
         return true;
       else if (type != other.type)
+        return false;
+      else if (function != other.function)
         return false;
       else if (firstVN != other.firstVN)
         return false;
@@ -96,6 +104,8 @@ namespace {
         return false;
       else if (type != other.type)
         return true;
+      else if (function != other.function)
+        return true;
       else if (firstVN != other.firstVN)
         return true;
       else if (secondVN != other.secondVN)
@@ -119,6 +129,8 @@ namespace {
     private:
       DenseMap<Value*, uint32_t> valueNumbering;
       DenseMap<Expression, uint32_t> expressionNumbering;
+      AliasAnalysis* AA;
+      MemoryDependenceAnalysis* MD;
 
       uint32_t nextValueNumber;
 
@@ -133,19 +145,22 @@ namespace {
       Expression create_expression(SelectInst* V);
       Expression create_expression(CastInst* C);
       Expression create_expression(GetElementPtrInst* G);
+      Expression create_expression(CallInst* C);
     public:
-      ValueTable() { nextValueNumber = 1; }
+      ValueTable() : nextValueNumber(1) { }
       uint32_t lookup_or_add(Value* V);
       uint32_t lookup(Value* V) const;
       void add(Value* V, uint32_t num);
       void clear();
       void erase(Value* v);
       unsigned size();
+      void setAliasAnalysis(AliasAnalysis* A) { AA = A; }
+      void setMemDep(MemoryDependenceAnalysis* M) { MD = M; }
   };
 }
 
 namespace llvm {
-template <> struct DenseMapKeyInfo<Expression> {
+template <> struct DenseMapInfo<Expression> {
   static inline Expression getEmptyKey() {
     return Expression(Expression::EMPTY);
   }
@@ -161,15 +176,22 @@ template <> struct DenseMapKeyInfo<Expression> {
     hash = e.secondVN + hash * 37;
     hash = e.thirdVN + hash * 37;
 
-    hash = (unsigned)((uintptr_t)e.type >> 4) ^
-            (unsigned)((uintptr_t)e.type >> 9) +
-            hash * 37;
+    hash = ((unsigned)((uintptr_t)e.type >> 4) ^
+            (unsigned)((uintptr_t)e.type >> 9)) +
+           hash * 37;
 
     for (SmallVector<uint32_t, 4>::const_iterator I = e.varargs.begin(),
          E = e.varargs.end(); I != E; ++I)
       hash = *I + hash * 37;
 
+    hash = ((unsigned)((uintptr_t)e.function >> 4) ^
+            (unsigned)((uintptr_t)e.function >> 9)) +
+           hash * 37;
+
     return hash;
+  }
+  static bool isEqual(const Expression &LHS, const Expression &RHS) {
+    return LHS == RHS;
   }
   static bool isPod() { return true; }
 };
@@ -178,148 +200,100 @@ template <> struct DenseMapKeyInfo<Expression> {
 //===----------------------------------------------------------------------===//
 //                     ValueTable Internal Functions
 //===----------------------------------------------------------------------===//
-Expression::ExpressionOpcode
-                             ValueTable::getOpcode(BinaryOperator* BO) {
+Expression::ExpressionOpcode ValueTable::getOpcode(BinaryOperator* BO) {
   switch(BO->getOpcode()) {
-    case Instruction::Add:
-      return Expression::ADD;
-    case Instruction::Sub:
-      return Expression::SUB;
-    case Instruction::Mul:
-      return Expression::MUL;
-    case Instruction::UDiv:
-      return Expression::UDIV;
-    case Instruction::SDiv:
-      return Expression::SDIV;
-    case Instruction::FDiv:
-      return Expression::FDIV;
-    case Instruction::URem:
-      return Expression::UREM;
-    case Instruction::SRem:
-      return Expression::SREM;
-    case Instruction::FRem:
-      return Expression::FREM;
-    case Instruction::Shl:
-      return Expression::SHL;
-    case Instruction::LShr:
-      return Expression::LSHR;
-    case Instruction::AShr:
-      return Expression::ASHR;
-    case Instruction::And:
-      return Expression::AND;
-    case Instruction::Or:
-      return Expression::OR;
-    case Instruction::Xor:
-      return Expression::XOR;
-
-    // THIS SHOULD NEVER HAPPEN
-    default:
-      assert(0 && "Binary operator with unknown opcode?");
-      return Expression::ADD;
+  default: // THIS SHOULD NEVER HAPPEN
+    assert(0 && "Binary operator with unknown opcode?");
+  case Instruction::Add:  return Expression::ADD;
+  case Instruction::Sub:  return Expression::SUB;
+  case Instruction::Mul:  return Expression::MUL;
+  case Instruction::UDiv: return Expression::UDIV;
+  case Instruction::SDiv: return Expression::SDIV;
+  case Instruction::FDiv: return Expression::FDIV;
+  case Instruction::URem: return Expression::UREM;
+  case Instruction::SRem: return Expression::SREM;
+  case Instruction::FRem: return Expression::FREM;
+  case Instruction::Shl:  return Expression::SHL;
+  case Instruction::LShr: return Expression::LSHR;
+  case Instruction::AShr: return Expression::ASHR;
+  case Instruction::And:  return Expression::AND;
+  case Instruction::Or:   return Expression::OR;
+  case Instruction::Xor:  return Expression::XOR;
   }
 }
 
 Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
-  if (C->getOpcode() == Instruction::ICmp) {
+  if (isa<ICmpInst>(C)) {
     switch (C->getPredicate()) {
-      case ICmpInst::ICMP_EQ:
-        return Expression::ICMPEQ;
-      case ICmpInst::ICMP_NE:
-        return Expression::ICMPNE;
-      case ICmpInst::ICMP_UGT:
-        return Expression::ICMPUGT;
-      case ICmpInst::ICMP_UGE:
-        return Expression::ICMPUGE;
-      case ICmpInst::ICMP_ULT:
-        return Expression::ICMPULT;
-      case ICmpInst::ICMP_ULE:
-        return Expression::ICMPULE;
-      case ICmpInst::ICMP_SGT:
-        return Expression::ICMPSGT;
-      case ICmpInst::ICMP_SGE:
-        return Expression::ICMPSGE;
-      case ICmpInst::ICMP_SLT:
-        return Expression::ICMPSLT;
-      case ICmpInst::ICMP_SLE:
-        return Expression::ICMPSLE;
-
-      // THIS SHOULD NEVER HAPPEN
-      default:
-        assert(0 && "Comparison with unknown predicate?");
-        return Expression::ICMPEQ;
+    default:  // THIS SHOULD NEVER HAPPEN
+      assert(0 && "Comparison with unknown predicate?");
+    case ICmpInst::ICMP_EQ:  return Expression::ICMPEQ;
+    case ICmpInst::ICMP_NE:  return Expression::ICMPNE;
+    case ICmpInst::ICMP_UGT: return Expression::ICMPUGT;
+    case ICmpInst::ICMP_UGE: return Expression::ICMPUGE;
+    case ICmpInst::ICMP_ULT: return Expression::ICMPULT;
+    case ICmpInst::ICMP_ULE: return Expression::ICMPULE;
+    case ICmpInst::ICMP_SGT: return Expression::ICMPSGT;
+    case ICmpInst::ICMP_SGE: return Expression::ICMPSGE;
+    case ICmpInst::ICMP_SLT: return Expression::ICMPSLT;
+    case ICmpInst::ICMP_SLE: return Expression::ICMPSLE;
     }
-  } else {
-    switch (C->getPredicate()) {
-      case FCmpInst::FCMP_OEQ:
-        return Expression::FCMPOEQ;
-      case FCmpInst::FCMP_OGT:
-        return Expression::FCMPOGT;
-      case FCmpInst::FCMP_OGE:
-        return Expression::FCMPOGE;
-      case FCmpInst::FCMP_OLT:
-        return Expression::FCMPOLT;
-      case FCmpInst::FCMP_OLE:
-        return Expression::FCMPOLE;
-      case FCmpInst::FCMP_ONE:
-        return Expression::FCMPONE;
-      case FCmpInst::FCMP_ORD:
-        return Expression::FCMPORD;
-      case FCmpInst::FCMP_UNO:
-        return Expression::FCMPUNO;
-      case FCmpInst::FCMP_UEQ:
-        return Expression::FCMPUEQ;
-      case FCmpInst::FCMP_UGT:
-        return Expression::FCMPUGT;
-      case FCmpInst::FCMP_UGE:
-        return Expression::FCMPUGE;
-      case FCmpInst::FCMP_ULT:
-        return Expression::FCMPULT;
-      case FCmpInst::FCMP_ULE:
-        return Expression::FCMPULE;
-      case FCmpInst::FCMP_UNE:
-        return Expression::FCMPUNE;
-
-      // THIS SHOULD NEVER HAPPEN
-      default:
-        assert(0 && "Comparison with unknown predicate?");
-        return Expression::FCMPOEQ;
-    }
+  }
+  assert(isa<FCmpInst>(C) && "Unknown compare");
+  switch (C->getPredicate()) {
+  default: // THIS SHOULD NEVER HAPPEN
+    assert(0 && "Comparison with unknown predicate?");
+  case FCmpInst::FCMP_OEQ: return Expression::FCMPOEQ;
+  case FCmpInst::FCMP_OGT: return Expression::FCMPOGT;
+  case FCmpInst::FCMP_OGE: return Expression::FCMPOGE;
+  case FCmpInst::FCMP_OLT: return Expression::FCMPOLT;
+  case FCmpInst::FCMP_OLE: return Expression::FCMPOLE;
+  case FCmpInst::FCMP_ONE: return Expression::FCMPONE;
+  case FCmpInst::FCMP_ORD: return Expression::FCMPORD;
+  case FCmpInst::FCMP_UNO: return Expression::FCMPUNO;
+  case FCmpInst::FCMP_UEQ: return Expression::FCMPUEQ;
+  case FCmpInst::FCMP_UGT: return Expression::FCMPUGT;
+  case FCmpInst::FCMP_UGE: return Expression::FCMPUGE;
+  case FCmpInst::FCMP_ULT: return Expression::FCMPULT;
+  case FCmpInst::FCMP_ULE: return Expression::FCMPULE;
+  case FCmpInst::FCMP_UNE: return Expression::FCMPUNE;
   }
 }
 
-Expression::ExpressionOpcode
-                             ValueTable::getOpcode(CastInst* C) {
+Expression::ExpressionOpcode ValueTable::getOpcode(CastInst* C) {
   switch(C->getOpcode()) {
-    case Instruction::Trunc:
-      return Expression::TRUNC;
-    case Instruction::ZExt:
-      return Expression::ZEXT;
-    case Instruction::SExt:
-      return Expression::SEXT;
-    case Instruction::FPToUI:
-      return Expression::FPTOUI;
-    case Instruction::FPToSI:
-      return Expression::FPTOSI;
-    case Instruction::UIToFP:
-      return Expression::UITOFP;
-    case Instruction::SIToFP:
-      return Expression::SITOFP;
-    case Instruction::FPTrunc:
-      return Expression::FPTRUNC;
-    case Instruction::FPExt:
-      return Expression::FPEXT;
-    case Instruction::PtrToInt:
-      return Expression::PTRTOINT;
-    case Instruction::IntToPtr:
-      return Expression::INTTOPTR;
-    case Instruction::BitCast:
-      return Expression::BITCAST;
-
-    // THIS SHOULD NEVER HAPPEN
-    default:
-      assert(0 && "Cast operator with unknown opcode?");
-      return Expression::BITCAST;
+  default: // THIS SHOULD NEVER HAPPEN
+    assert(0 && "Cast operator with unknown opcode?");
+  case Instruction::Trunc:    return Expression::TRUNC;
+  case Instruction::ZExt:     return Expression::ZEXT;
+  case Instruction::SExt:     return Expression::SEXT;
+  case Instruction::FPToUI:   return Expression::FPTOUI;
+  case Instruction::FPToSI:   return Expression::FPTOSI;
+  case Instruction::UIToFP:   return Expression::UITOFP;
+  case Instruction::SIToFP:   return Expression::SITOFP;
+  case Instruction::FPTrunc:  return Expression::FPTRUNC;
+  case Instruction::FPExt:    return Expression::FPEXT;
+  case Instruction::PtrToInt: return Expression::PTRTOINT;
+  case Instruction::IntToPtr: return Expression::INTTOPTR;
+  case Instruction::BitCast:  return Expression::BITCAST;
   }
+}
+
+Expression ValueTable::create_expression(CallInst* C) {
+  Expression e;
+
+  e.type = C->getType();
+  e.firstVN = 0;
+  e.secondVN = 0;
+  e.thirdVN = 0;
+  e.function = C->getCalledFunction();
+  e.opcode = Expression::CALL;
+
+  for (CallInst::op_iterator I = C->op_begin()+1, E = C->op_end();
+       I != E; ++I)
+    e.varargs.push_back(lookup_or_add(*I));
+
+  return e;
 }
 
 Expression ValueTable::create_expression(BinaryOperator* BO) {
@@ -328,6 +302,7 @@ Expression ValueTable::create_expression(BinaryOperator* BO) {
   e.firstVN = lookup_or_add(BO->getOperand(0));
   e.secondVN = lookup_or_add(BO->getOperand(1));
   e.thirdVN = 0;
+  e.function = 0;
   e.type = BO->getType();
   e.opcode = getOpcode(BO);
 
@@ -340,6 +315,7 @@ Expression ValueTable::create_expression(CmpInst* C) {
   e.firstVN = lookup_or_add(C->getOperand(0));
   e.secondVN = lookup_or_add(C->getOperand(1));
   e.thirdVN = 0;
+  e.function = 0;
   e.type = C->getType();
   e.opcode = getOpcode(C);
 
@@ -352,6 +328,7 @@ Expression ValueTable::create_expression(CastInst* C) {
   e.firstVN = lookup_or_add(C->getOperand(0));
   e.secondVN = 0;
   e.thirdVN = 0;
+  e.function = 0;
   e.type = C->getType();
   e.opcode = getOpcode(C);
 
@@ -364,6 +341,7 @@ Expression ValueTable::create_expression(ShuffleVectorInst* S) {
   e.firstVN = lookup_or_add(S->getOperand(0));
   e.secondVN = lookup_or_add(S->getOperand(1));
   e.thirdVN = lookup_or_add(S->getOperand(2));
+  e.function = 0;
   e.type = S->getType();
   e.opcode = Expression::SHUFFLE;
 
@@ -376,6 +354,7 @@ Expression ValueTable::create_expression(ExtractElementInst* E) {
   e.firstVN = lookup_or_add(E->getOperand(0));
   e.secondVN = lookup_or_add(E->getOperand(1));
   e.thirdVN = 0;
+  e.function = 0;
   e.type = E->getType();
   e.opcode = Expression::EXTRACT;
 
@@ -388,6 +367,7 @@ Expression ValueTable::create_expression(InsertElementInst* I) {
   e.firstVN = lookup_or_add(I->getOperand(0));
   e.secondVN = lookup_or_add(I->getOperand(1));
   e.thirdVN = lookup_or_add(I->getOperand(2));
+  e.function = 0;
   e.type = I->getType();
   e.opcode = Expression::INSERT;
 
@@ -400,6 +380,7 @@ Expression ValueTable::create_expression(SelectInst* I) {
   e.firstVN = lookup_or_add(I->getCondition());
   e.secondVN = lookup_or_add(I->getTrueValue());
   e.thirdVN = lookup_or_add(I->getFalseValue());
+  e.function = 0;
   e.type = I->getType();
   e.opcode = Expression::SELECT;
 
@@ -412,6 +393,7 @@ Expression ValueTable::create_expression(GetElementPtrInst* G) {
   e.firstVN = lookup_or_add(G->getPointerOperand());
   e.secondVN = 0;
   e.thirdVN = 0;
+  e.function = 0;
   e.type = G->getType();
   e.opcode = Expression::GEP;
 
@@ -433,8 +415,52 @@ uint32_t ValueTable::lookup_or_add(Value* V) {
   if (VI != valueNumbering.end())
     return VI->second;
 
+  if (CallInst* C = dyn_cast<CallInst>(V)) {
+    if (AA->doesNotAccessMemory(C)) {
+      Expression e = create_expression(C);
 
-  if (BinaryOperator* BO = dyn_cast<BinaryOperator>(V)) {
+      DenseMap<Expression, uint32_t>::iterator EI = expressionNumbering.find(e);
+      if (EI != expressionNumbering.end()) {
+        valueNumbering.insert(std::make_pair(V, EI->second));
+        return EI->second;
+      } else {
+        expressionNumbering.insert(std::make_pair(e, nextValueNumber));
+        valueNumbering.insert(std::make_pair(V, nextValueNumber));
+
+        return nextValueNumber++;
+      }
+    } else if (AA->onlyReadsMemory(C)) {
+      Expression e = create_expression(C);
+
+      Instruction* dep = MD->getDependency(C);
+
+      if (dep == MemoryDependenceAnalysis::NonLocal ||
+          !isa<CallInst>(dep)) {
+        expressionNumbering.insert(std::make_pair(e, nextValueNumber));
+        valueNumbering.insert(std::make_pair(V, nextValueNumber));
+
+        return nextValueNumber++;
+      }
+
+      CallInst* cdep = cast<CallInst>(dep);
+      Expression d_exp = create_expression(cdep);
+
+      if (e != d_exp) {
+        expressionNumbering.insert(std::make_pair(e, nextValueNumber));
+        valueNumbering.insert(std::make_pair(V, nextValueNumber));
+
+        return nextValueNumber++;
+      } else {
+        uint32_t v = expressionNumbering[d_exp];
+        valueNumbering.insert(std::make_pair(V, v));
+        return v;
+      }
+
+    } else {
+      valueNumbering.insert(std::make_pair(V, nextValueNumber));
+      return nextValueNumber++;
+    }
+  } else if (BinaryOperator* BO = dyn_cast<BinaryOperator>(V)) {
     Expression e = create_expression(BO);
 
     DenseMap<Expression, uint32_t>::iterator EI = expressionNumbering.find(e);
@@ -548,12 +574,8 @@ uint32_t ValueTable::lookup_or_add(Value* V) {
 /// the value has not yet been numbered.
 uint32_t ValueTable::lookup(Value* V) const {
   DenseMap<Value*, uint32_t>::iterator VI = valueNumbering.find(V);
-  if (VI != valueNumbering.end())
-    return VI->second;
-  else
-    assert(0 && "Value not numbered?");
-
-  return 0;
+  assert(VI != valueNumbering.end() && "Value not numbered?");
+  return VI->second;
 }
 
 /// clear - Remove all entries from the ValueTable
@@ -572,12 +594,12 @@ void ValueTable::erase(Value* V) {
 //                       ValueNumberedSet Class
 //===----------------------------------------------------------------------===//
 namespace {
-class ValueNumberedSet {
+class VISIBILITY_HIDDEN ValueNumberedSet {
   private:
     SmallPtrSet<Value*, 8> contents;
-    BitVector numbers;
+    SparseBitVector<64> numbers;
   public:
-    ValueNumberedSet() { numbers.resize(1); }
+    ValueNumberedSet() { }
     ValueNumberedSet(const ValueNumberedSet& other) {
       numbers = other.numbers;
       contents = other.contents;
@@ -595,9 +617,6 @@ class ValueNumberedSet {
     size_t size() { return contents.size(); }
 
     void set(unsigned i)  {
-      if (i >= numbers.size())
-        numbers.resize(i+1);
-
       numbers.set(i);
     }
 
@@ -607,20 +626,11 @@ class ValueNumberedSet {
     }
 
     void reset(unsigned i)  {
-      if (i < numbers.size())
-        numbers.reset(i);
+      numbers.reset(i);
     }
 
     bool test(unsigned i)  {
-      if (i >= numbers.size())
-        return false;
-
       return numbers.test(i);
-    }
-
-    void clear() {
-      contents.clear();
-      numbers.clear();
     }
 };
 }
@@ -651,6 +661,8 @@ namespace {
       AU.setPreservesCFG();
       AU.addRequired<DominatorTree>();
       AU.addRequired<MemoryDependenceAnalysis>();
+      AU.addRequired<AliasAnalysis>();
+      AU.addPreserved<AliasAnalysis>();
       AU.addPreserved<MemoryDependenceAnalysis>();
     }
 
@@ -659,14 +671,14 @@ namespace {
     Value* find_leader(ValueNumberedSet& vals, uint32_t v) ;
     void val_insert(ValueNumberedSet& s, Value* v);
     bool processLoad(LoadInst* L,
-                     DenseMap<Value*, LoadInst*>& lastLoad,
-                     SmallVector<Instruction*, 4>& toErase);
+                     DenseMap<Value*, LoadInst*> &lastLoad,
+                     SmallVectorImpl<Instruction*> &toErase);
     bool processInstruction(Instruction* I,
                             ValueNumberedSet& currAvail,
                             DenseMap<Value*, LoadInst*>& lastSeenLoad,
-                            SmallVector<Instruction*, 4>& toErase);
+                            SmallVectorImpl<Instruction*> &toErase);
     bool processNonLocalLoad(LoadInst* L,
-                             SmallVector<Instruction*, 4>& toErase);
+                             SmallVectorImpl<Instruction*> &toErase);
     Value *GetValueForBlock(BasicBlock *BB, LoadInst* orig,
                             DenseMap<BasicBlock*, Value*> &Phis,
                             bool top_level = false);
@@ -677,17 +689,13 @@ namespace {
   };
 
   char GVN::ID = 0;
-
 }
 
 // createGVNPass - The public interface to this file...
 FunctionPass *llvm::createGVNPass() { return new GVN(); }
 
 static RegisterPass<GVN> X("pre-gvn",
-                           "Global Value Numbering for Partially Redundant Elimination");
-
-STATISTIC(NumGVNInstr, "Number of instructions deleted");
-STATISTIC(NumGVNLoad, "Number of loads deleted");
+                           "Global Value Numbering");
 
 /// find_leader - Given a set and a value number, return the first
 /// element of the set with that value number, or 0 if no such element
@@ -729,16 +737,15 @@ Value* GVN::CollapsePhi(PHINode* p) {
   DominatorTree &DT = getAnalysis<DominatorTree>();
   Value* constVal = p->hasConstantValue();
 
-  if (constVal) {
-    if (Instruction* inst = dyn_cast<Instruction>(constVal)) {
-      if (DT.dominates(inst, p))
-        if (isSafeReplacement(p, inst))
-          return inst;
-    } else {
-      return constVal;
-    }
-  }
+  if (!constVal) return 0;
 
+  Instruction* inst = dyn_cast<Instruction>(constVal);
+  if (!inst)
+    return constVal;
+
+  if (DT.dominates(inst, p))
+    if (isSafeReplacement(p, inst))
+      return inst;
   return 0;
 }
 
@@ -758,8 +765,8 @@ bool GVN::isSafeReplacement(PHINode* p, Instruction* inst) {
 /// GetValueForBlock - Get the value to use within the specified basic block.
 /// available values are in Phis.
 Value *GVN::GetValueForBlock(BasicBlock *BB, LoadInst* orig,
-                               DenseMap<BasicBlock*, Value*> &Phis,
-                               bool top_level) {
+                             DenseMap<BasicBlock*, Value*> &Phis,
+                             bool top_level) {
 
   // If we have already computed this value, return the previously computed val.
   DenseMap<BasicBlock*, Value*>::iterator V = Phis.find(BB);
@@ -771,10 +778,11 @@ Value *GVN::GetValueForBlock(BasicBlock *BB, LoadInst* orig,
     Phis[BB] = ret;
     return ret;
   }
+
   // Otherwise, the idom is the loop, so we need to insert a PHI node.  Do so
   // now, then get values to fill in the incoming values for the PHI.
-  PHINode *PN = new PHINode(orig->getType(), orig->getName()+".rle",
-                            BB->begin());
+  PHINode *PN = PHINode::Create(orig->getType(), orig->getName()+".rle",
+                                BB->begin());
   PN->reserveOperandSpace(std::distance(pred_begin(BB), pred_end(BB)));
 
   if (Phis.count(BB) == 0)
@@ -783,39 +791,40 @@ Value *GVN::GetValueForBlock(BasicBlock *BB, LoadInst* orig,
   // Fill in the incoming values for the block.
   for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
     Value* val = GetValueForBlock(*PI, orig, Phis);
-
     PN->addIncoming(val, *PI);
   }
 
+  AliasAnalysis& AA = getAnalysis<AliasAnalysis>();
+  AA.copyValue(orig, PN);
+
   // Attempt to collapse PHI nodes that are trivially redundant
   Value* v = CollapsePhi(PN);
-  if (v) {
-    MemoryDependenceAnalysis& MD = getAnalysis<MemoryDependenceAnalysis>();
-
-    MD.removeInstruction(PN);
-    PN->replaceAllUsesWith(v);
-
-    for (DenseMap<BasicBlock*, Value*>::iterator I = Phis.begin(),
-         E = Phis.end(); I != E; ++I)
-      if (I->second == PN)
-        I->second = v;
-
-    PN->eraseFromParent();
-
-    Phis[BB] = v;
-
-    return v;
+  if (!v) {
+    // Cache our phi construction results
+    phiMap[orig->getPointerOperand()].insert(PN);
+    return PN;
   }
 
-  // Cache our phi construction results
-  phiMap[orig->getPointerOperand()].insert(PN);
-  return PN;
+  MemoryDependenceAnalysis& MD = getAnalysis<MemoryDependenceAnalysis>();
+
+  MD.removeInstruction(PN);
+  PN->replaceAllUsesWith(v);
+
+  for (DenseMap<BasicBlock*, Value*>::iterator I = Phis.begin(),
+       E = Phis.end(); I != E; ++I)
+    if (I->second == PN)
+      I->second = v;
+
+  PN->eraseFromParent();
+
+  Phis[BB] = v;
+  return v;
 }
 
 /// processNonLocalLoad - Attempt to eliminate a load whose dependencies are
 /// non-local by performing PHI construction.
 bool GVN::processNonLocalLoad(LoadInst* L,
-                              SmallVector<Instruction*, 4>& toErase) {
+                              SmallVectorImpl<Instruction*> &toErase) {
   MemoryDependenceAnalysis& MD = getAnalysis<MemoryDependenceAnalysis>();
 
   // Find the non-local dependencies of the load
@@ -826,24 +835,25 @@ bool GVN::processNonLocalLoad(LoadInst* L,
 
   // Filter out useless results (non-locals, etc)
   for (DenseMap<BasicBlock*, Value*>::iterator I = deps.begin(), E = deps.end();
-       I != E; ++I)
-    if (I->second == MemoryDependenceAnalysis::None) {
+       I != E; ++I) {
+    if (I->second == MemoryDependenceAnalysis::None)
       return false;
-    } else if (I->second == MemoryDependenceAnalysis::NonLocal) {
+
+    if (I->second == MemoryDependenceAnalysis::NonLocal)
       continue;
-    }else if (StoreInst* S = dyn_cast<StoreInst>(I->second)) {
-      if (S->getPointerOperand() == L->getPointerOperand())
-        repl[I->first] = S->getOperand(0);
-      else
+
+    if (StoreInst* S = dyn_cast<StoreInst>(I->second)) {
+      if (S->getPointerOperand() != L->getPointerOperand())
         return false;
+      repl[I->first] = S->getOperand(0);
     } else if (LoadInst* LD = dyn_cast<LoadInst>(I->second)) {
-      if (LD->getPointerOperand() == L->getPointerOperand())
-        repl[I->first] = LD;
-      else
+      if (LD->getPointerOperand() != L->getPointerOperand())
         return false;
+      repl[I->first] = LD;
     } else {
       return false;
     }
+  }
 
   // Use cached PHI construction information from previous runs
   SmallPtrSet<Instruction*, 4>& p = phiMap[L->getPointerOperand()];
@@ -854,11 +864,10 @@ bool GVN::processNonLocalLoad(LoadInst* L,
       L->replaceAllUsesWith(*I);
       toErase.push_back(L);
       NumGVNLoad++;
-
       return true;
-    } else {
-      repl.insert(std::make_pair((*I)->getParent(), *I));
     }
+
+    repl.insert(std::make_pair((*I)->getParent(), *I));
   }
 
   // Perform PHI construction
@@ -875,9 +884,8 @@ bool GVN::processNonLocalLoad(LoadInst* L,
 
 /// processLoad - Attempt to eliminate a load, first by eliminating it
 /// locally, and then attempting non-local elimination if that fails.
-bool GVN::processLoad(LoadInst* L,
-                         DenseMap<Value*, LoadInst*>& lastLoad,
-                         SmallVector<Instruction*, 4>& toErase) {
+bool GVN::processLoad(LoadInst *L, DenseMap<Value*, LoadInst*> &lastLoad,
+                      SmallVectorImpl<Instruction*> &toErase) {
   if (L->isVolatile()) {
     lastLoad[L->getPointerOperand()] = L;
     return false;
@@ -942,6 +950,33 @@ bool GVN::processLoad(LoadInst* L,
     }
   }
 
+  if (dep != MemoryDependenceAnalysis::None &&
+      dep != MemoryDependenceAnalysis::NonLocal &&
+      isa<AllocationInst>(dep)) {
+    // Check that this load is actually from the
+    // allocation we found
+    Value* v = L->getOperand(0);
+    while (true) {
+      if (BitCastInst *BC = dyn_cast<BitCastInst>(v))
+        v = BC->getOperand(0);
+      else if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(v))
+        v = GEP->getOperand(0);
+      else
+        break;
+    }
+    if (v == dep) {
+      // If this load depends directly on an allocation, there isn't
+      // anything stored there; therefore, we can optimize this load
+      // to undef.
+      MD.removeInstruction(L);
+
+      L->replaceAllUsesWith(UndefValue::get(L->getType()));
+      toErase.push_back(L);
+      deletedLoad = true;
+      NumGVNLoad++;
+    }
+  }
+
   if (!deletedLoad)
     last = L;
 
@@ -950,13 +985,16 @@ bool GVN::processLoad(LoadInst* L,
 
 /// processInstruction - When calculating availability, handle an instruction
 /// by inserting it into the appropriate sets
-bool GVN::processInstruction(Instruction* I,
-                                ValueNumberedSet& currAvail,
-                                DenseMap<Value*, LoadInst*>& lastSeenLoad,
-                                SmallVector<Instruction*, 4>& toErase) {
-  if (LoadInst* L = dyn_cast<LoadInst>(I)) {
+bool GVN::processInstruction(Instruction *I, ValueNumberedSet &currAvail,
+                             DenseMap<Value*, LoadInst*> &lastSeenLoad,
+                             SmallVectorImpl<Instruction*> &toErase) {
+  if (LoadInst* L = dyn_cast<LoadInst>(I))
     return processLoad(L, lastSeenLoad, toErase);
-  }
+
+  // Allocations are always uniquely numbered, so we can save time and memory
+  // by fast failing them.
+  if (isa<AllocationInst>(I))
+    return false;
 
   unsigned num = VN.lookup_or_add(I);
 
@@ -977,6 +1015,10 @@ bool GVN::processInstruction(Instruction* I,
   } else if (currAvail.test(num)) {
     Value* repl = find_leader(currAvail, num);
 
+    // Remove it!
+    MemoryDependenceAnalysis& MD = getAnalysis<MemoryDependenceAnalysis>();
+    MD.removeInstruction(I);
+
     VN.erase(I);
     I->replaceAllUsesWith(repl);
     toErase.push_back(I);
@@ -993,6 +1035,9 @@ bool GVN::processInstruction(Instruction* I,
 // function.
 //
 bool GVN::runOnFunction(Function& F) {
+  VN.setAliasAnalysis(&getAnalysis<AliasAnalysis>());
+  VN.setMemDep(&getAnalysis<MemoryDependenceAnalysis>());
+
   bool changed = false;
   bool shouldContinue = true;
 
@@ -1016,7 +1061,9 @@ bool GVN::iterateOnFunction(Function &F) {
 
   DominatorTree &DT = getAnalysis<DominatorTree>();
 
-  SmallVector<Instruction*, 4> toErase;
+  SmallVector<Instruction*, 8> toErase;
+  DenseMap<Value*, LoadInst*> lastSeenLoad;
+  DenseMap<DomTreeNode*, size_t> numChildrenVisited;
 
   // Top-down walk of the dominator tree
   for (df_iterator<DomTreeNode*> DI = df_begin(DT.getRootNode()),
@@ -1024,27 +1071,47 @@ bool GVN::iterateOnFunction(Function &F) {
 
     // Get the set to update for this block
     ValueNumberedSet& currAvail = availableOut[DI->getBlock()];
-    DenseMap<Value*, LoadInst*> lastSeenLoad;
+    lastSeenLoad.clear();
 
     BasicBlock* BB = DI->getBlock();
 
     // A block inherits AVAIL_OUT from its dominator
-    if (DI->getIDom() != 0)
+    if (DI->getIDom() != 0) {
       currAvail = availableOut[DI->getIDom()->getBlock()];
 
+      numChildrenVisited[DI->getIDom()]++;
+
+      if (numChildrenVisited[DI->getIDom()] == DI->getIDom()->getNumChildren()) {
+        availableOut.erase(DI->getIDom()->getBlock());
+        numChildrenVisited.erase(DI->getIDom());
+      }
+    }
+
     for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();
-         BI != BE; ) {
+         BI != BE;) {
       changed_function |= processInstruction(BI, currAvail,
                                              lastSeenLoad, toErase);
+      if (toErase.empty()) {
+        ++BI;
+        continue;
+      }
 
+      // If we need some instructions deleted, do it now.
       NumGVNInstr += toErase.size();
 
-      // Avoid iterator invalidation
-      ++BI;
+      // Avoid iterator invalidation.
+      bool AtStart = BI == BB->begin();
+      if (!AtStart)
+        --BI;
 
       for (SmallVector<Instruction*, 4>::iterator I = toErase.begin(),
            E = toErase.end(); I != E; ++I)
         (*I)->eraseFromParent();
+
+      if (AtStart)
+        BI = BB->begin();
+      else
+        ++BI;
 
       toErase.clear();
     }
