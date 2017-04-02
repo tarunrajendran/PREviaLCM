@@ -22,31 +22,16 @@ using namespace std;
 // STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
 // STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
 
-class Term {
-public:
-  Value* operand1;
-  unsigned opcode;
-  Value* operand2;
-  Term(Value* v1, unsigned opcode, Value* v2) {
-    this->operand1 = v1;
-    this->opcode = opcode;
-    this->operand2 = v2;
-  }
+typedef pair< pair<Value*, Value*>, unsigned > term_t;
+term_t makeTerm(Value* operand1, unsigned opcode, Value* operand2) {
+  pair<Value*, Value*> operands(operand1, operand2);
+  term_t term(operands, opcode);
+  return term;
+}
 
-  bool operator==(const Term &R) {
-    DEBUG(errs() << "#comparison: " << "\n");
-    return (this->operand1 == R.operand1 &&
-          this->opcode == R.opcode &&
-          this->operand1 == R.operand2);
-  }
-
-  bool operator<(const Term &R) {
-    DEBUG(errs() << "#comparison<: " << "\n");
-    return (this->operand1 == R.operand1 &&
-          this->opcode == R.opcode &&
-          this->operand1 == R.operand2);
-  }
-};
+#define term_operand1(term) (term.first.first)
+#define term_operand2(term) (term.first.second)
+#define term_opcode(term) (term.second)
 
 namespace {
   struct PRE : public FunctionPass {
@@ -56,7 +41,12 @@ namespace {
     // Entry point for the overall pre pass
     bool runOnFunction(Function &F);
 
-    std::unordered_set<Term*> getPartialRedundantExpressions(Function &F);
+    std::set<term_t> getPartialRedundantExpressions(Function &F);
+    bool Used(Instruction &inst, term_t term);
+    bool Transp(Instruction &inst, term_t term);
+    bool DSafe(Instruction &inst, term_t term);
+    Instruction* getBinarySuccessor(Instruction *inst);
+    std::set<Instruction*> getSuccessors(Instruction *inst);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -89,8 +79,8 @@ FunctionPass *createPartialRedundancyEliminationPass() { return new PRE(); }
 // Entry point for the overall PartialRedundancyElimination function pass.
 // This function is provided to you.
 
-std::unordered_set<Term*> PRE::getPartialRedundantExpressions(Function &F) {
-  std::unordered_set<Term*> partiallyRedundant;
+std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
+  std::set<term_t> partiallyRedundant;
 
   // http://llvm.org/docs/ProgrammersManual.html#iterating-over-the-instruction-in-a-function
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
@@ -103,33 +93,107 @@ std::unordered_set<Term*> PRE::getPartialRedundantExpressions(Function &F) {
       DEBUG(errs() << "  #operand: " << *(inst->getOperand(1)) << "\n");
       DEBUG(errs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
 
-      Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
+      // Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
+      term_t term = makeTerm(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
       partiallyRedundant.insert(term);
     } else {
     }
   }
-
   DEBUG(errs() << "#done: " << partiallyRedundant.size() << "\n");
-  if (*(partiallyRedundant.begin()) == *(++(partiallyRedundant.begin()))) {
-    DEBUG(errs() << "#equal\n");
+  return partiallyRedundant;
+}
+
+bool PRE::Used(Instruction &inst, term_t term) {
+  // compare two operands and opcode
+  if (inst.isBinaryOp()) {
+    Value* operand1 = inst.getOperand(0);
+    Value* operand2 = inst.getOperand(1);
+    unsigned opcode = inst.getOpcode();
+    if (operand1 == term_operand1(term) &&
+        operand2 == term_operand2(term) &&
+        opcode == term_opcode(term)) {
+      return true;
+    } else {
+      return false;
+    }
   } else {
-    DEBUG(errs() << "#notequal\n");
-    DEBUG(errs() << *((*(partiallyRedundant.begin()))->operand1) << "\n" );
-    DEBUG(errs() << *((*(++(partiallyRedundant.begin())))->operand1) << "\n" );
-    if ( (((*(partiallyRedundant.begin()))->operand1)) == (((*(++(partiallyRedundant.begin())))->operand1)) ) {
-      DEBUG(errs() << "operands equal\n");
+    return false;
+  }
+}
+
+bool PRE::Transp(Instruction &inst, term_t term) {
+  return true;
+}
+
+bool PRE::DSafe(Instruction &inst, term_t term) {
+  if (Used(inst, term)) return true;
+  if (Transp(inst, term)) {
+    std::set<Instruction*> successors = getSuccessors(&inst);
+    for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
+      bool dsafe = DSafe(&*I, term); // TODO: memoization
+      if (!dsafe) return false;
+    }
+  }
+  return false;
+}
+
+Instruction* PRE::getBinarySuccessor(Instruction *inst) {
+  BasicBlock *parent = inst->getParent();
+  bool findSelf = false;
+  for (auto I = parent->begin(), E = parent->end(); I != E; ++I) {
+    Instruction *i = &*I;
+    if (i == inst) {
+      findSelf = true;
+      continue;
+    }
+    if (findSelf && i->isBinaryOp()) {
+      return i;
+    }
+  }
+  return null; // no successor found
+}
+
+
+std::set<Instruction*> PRE::getSuccessors(Instruction *inst) {
+  std::set<Instruction*> successors;
+
+  BasicBlock *parent = inst->getParent();
+  if (&*(--(parent->end())) == inst) {   // the end of basic block
+    TerminatorInst *termInst = parent->getTerminator();
+    unsigned numSuccessors = termInst->getNumSuccessors();
+    for (unsigned i = 0; i < numSuccessors; i++) {
+      BasicBlock *successorBB = termInst->getSuccessor(i);
+      Instruction *firstInst = &*(successorBB->begin());
+      successors.insert(firstInst);
+    }
+  } else { // has multiple successors
+    for (auto I = parent->begin(), E = parent->end(); I != E; ++I) {
+      if (inst == &*I) {
+        I++;
+        successors.insert(&*I);
+        break;
+      }
     }
   }
 
-  return partiallyRedundant;
+  return successors;
 }
+
 
 bool PRE::runOnFunction(Function &F) {
 
   bool Changed = false;
 
+  DEBUG(errs() << "#### PRE ####\n");
   // for test
   getPartialRedundantExpressions(F);
+
+  for (Function::iterator b = F.begin(), be = F.end(); b != be; ++b) {
+    BasicBlock * block = &*b;
+    Instruction *inst = &*(--(--(block->end())));
+    DEBUG(errs() << block->back() << "\n");
+    DEBUG(errs() << *inst << "\n");
+  }
 
   return Changed;
 
