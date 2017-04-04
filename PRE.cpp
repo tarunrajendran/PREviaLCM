@@ -13,6 +13,7 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Support/raw_ostream.h"
 #include <vector>
 #include <set>
@@ -55,6 +56,9 @@ namespace {
     Instruction* getBinarySuccessor(Instruction *inst);
     std::set<Instruction*> getSuccessors(Instruction *inst);
     std::set<Instruction*> getPredecessors(Instruction *inst);
+    void performSafeEarliestTransform(Function &F, term_t term);
+    void getDSafes(Function &F, term_t term);
+    void getEarliests(Function &F, term_t term);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -93,13 +97,13 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
   // http://llvm.org/docs/ProgrammersManual.html#iterating-over-the-instruction-in-a-function
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *inst = &*I;
-    DEBUG(errs() << "#inst: " << *inst << "\n");
+    DEBUG(dbgs() << "#inst: " << *inst << "\n");
     if (inst->isBinaryOp()) { //
-      DEBUG(errs() << "#binary inst: " << *inst << "\n");
-      DEBUG(errs() << "  #operands: " << inst->getNumOperands() << "\n");
-      DEBUG(errs() << "  #operand: " << *(inst->getOperand(0)) << "\n");
-      DEBUG(errs() << "  #operand: " << *(inst->getOperand(1)) << "\n");
-      DEBUG(errs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
+      DEBUG(dbgs() << "#binary inst: " << *inst << "\n");
+      DEBUG(dbgs() << "  #operands: " << inst->getNumOperands() << "\n");
+      DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(0)) << "\n");
+      DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(1)) << "\n");
+      DEBUG(dbgs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
 
       // Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
       term_t term = makeTerm(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
@@ -107,7 +111,7 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
     } else {
     }
   }
-  DEBUG(errs() << "#done: " << partiallyRedundant.size() << "\n");
+  DEBUG(dbgs() << "#done: " << partiallyRedundant.size() << "\n");
   return partiallyRedundant;
 }
 
@@ -260,21 +264,50 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
   return predecessorsSet;
 }
 
+void PRE::performSafeEarliestTransform(Function &F, term_t term) {
+  DEBUG(dbgs() << "performSafeEarliestTransform\n");
+  getDSafes(F, term);
+  getEarliests(F, term);
+}
+
+// backwards
+void PRE::getDSafes(Function &F, term_t term) {
+  mem_dsafe.clear();
+  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                IE = po_end(&F.getEntryBlock());
+                               I != IE; ++I) {
+    BasicBlock * bb = &*I;
+  }
+}
+
+// forwards
+void PRE::getEarliests(Function &F, term_t term) {
+  mem_earliest.clear();
+
+  
+}
+
 
 bool PRE::runOnFunction(Function &F) {
 
   bool Changed = false;
 
-  DEBUG(errs() << "#### PRE ####\n");
-  // for test
-  getPartialRedundantExpressions(F);
+  DEBUG(dbgs() << "#### PRE ####\n");
 
+  // for test
+  std::set<term_t> terms = getPartialRedundantExpressions(F);
+  for (auto term : terms) {
+    performSafeEarliestTransform(F, term);
+  }
+
+  /*
   for (Function::iterator b = F.begin(), be = F.end(); b != be; ++b) {
     BasicBlock * block = &*b;
     Instruction *inst = &*(--(--(block->end())));
-    DEBUG(errs() << block->back() << "\n");
-    DEBUG(errs() << *inst << "\n");
+    DEBUG(dbgs() << block->back() << "\n");
+    DEBUG(dbgs() << *inst << "\n");
   }
+  */
 
   return Changed;
 
