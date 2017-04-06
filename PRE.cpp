@@ -134,7 +134,13 @@ bool PRE::Used(Instruction &inst, term_t term) {
 }
 
 bool PRE::Transp(Instruction &inst, term_t term) {
-  return true;
+  Value* operand1 = term_operand1(term);
+  Value* operand2 = term_operand2(term);
+  if ((&inst != operand1) && (&inst != operand2)) {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool PRE::DSafe(Instruction &inst, term_t term) {
@@ -265,9 +271,20 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
 }
 
 void PRE::performSafeEarliestTransform(Function &F, term_t term) {
-  DEBUG(dbgs() << "performSafeEarliestTransform\n");
+  DEBUG(dbgs() << "#performSafeEarliestTransform\n");
+  DEBUG(dbgs() << "term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
   getDSafes(F, term);
   getEarliests(F, term);
+
+  // print out mem_dsafe and mem_earliest for testing
+
+  DEBUG(dbgs() << "#DSafe:\n");
+  for (auto &dsafe_pair : mem_dsafe) {
+    Instruction* inst = dsafe_pair.first;
+    bool dsafe = dsafe_pair.second;
+    bool earliest = mem_earliest[inst];
+    DEBUG(dbgs() << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
+  }
 }
 
 // backwards
@@ -276,7 +293,11 @@ void PRE::getDSafes(Function &F, term_t term) {
   for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
                                 IE = po_end(&F.getEntryBlock());
                                I != IE; ++I) {
-    BasicBlock * bb = &*I;
+    BasicBlock * bb = *I;
+    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      DSafe(*inst, term);
+    }
   }
 }
 
@@ -284,7 +305,16 @@ void PRE::getDSafes(Function &F, term_t term) {
 void PRE::getEarliests(Function &F, term_t term) {
   mem_earliest.clear();
 
-  
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                           RE = RPOT.end();
+       RI != RE; ++RI) {
+    BasicBlock * bb = *RI;
+    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      Earliest(*inst, term);
+    }
+  }
 }
 
 
