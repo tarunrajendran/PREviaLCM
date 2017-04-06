@@ -8,11 +8,15 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -292,12 +296,38 @@ void PRE::performSafeEarliestTransform(Function &F, term_t term) {
   }
 
   // insert instruction that is both earliest and
-  for (auto &dsafe_pair : mem_dsafe) {
-    Instruction* inst = dsafe_pair.first;
-    bool dsafe = dsafe_pair.second;
-    bool earliest = mem_earliest[inst];
-    if (dsafe && earliest) {
-      BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst);
+  // and update term to load inst
+  Value *val;
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                           RE = RPOT.end();
+       RI != RE; ++RI) {
+    BasicBlock * bb = *RI;
+    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      if (mem_dsafe[inst] && mem_earliest[inst]) {
+        // insert instruction
+        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
+        Type *binaryOperatorType = binaryOperator->getType();
+
+        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
+
+        /*Value* storeInst = */dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+
+        val = allocaInst;
+
+      }
+      if (mem_used.find(inst) != mem_used.end()) {
+        auto nextIt = ++it;
+        LLVMContext & C = inst->getModule()->getContext();
+        IRBuilder<> IRB(C);
+        DEBUG(dbgs() << "@@ " << *val << "\n");
+        auto loadInst = IRB.CreateLoad(val, Twine());
+        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
+        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
+        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
+        nextIt = --nextIt;
+      }
     }
   }
 
