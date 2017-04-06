@@ -74,6 +74,7 @@ namespace {
     void getEarliests(Function &F, term_t term);
     void getDelays(Function &F, term_t term);
     void getLatests(Function &F, term_t term);
+    void getIsolateds(Function &F, term_t term);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -476,6 +477,20 @@ void PRE::getLatests(Function &F, term_t term) {
     for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
       Instruction * inst = &*it;
       Latest(*inst, term);
+    }
+  }
+}
+
+void PRE::getIsolateds(Function &F, term_t term) {
+  mem_isolated.clear();
+
+  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                IE = po_end(&F.getEntryBlock());
+                               I != IE; ++I) {
+    BasicBlock * bb = *I;
+    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      Isolated(*inst, term);
     }
   }
 }
