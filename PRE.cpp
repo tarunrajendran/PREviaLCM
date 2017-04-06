@@ -54,12 +54,16 @@ namespace {
     std::set<Instruction*> mem_used;
     std::map<Instruction*, bool> mem_dsafe;
     std::map<Instruction*, bool> mem_earliest;
+    std::map<Instruction*, bool> mem_delay;
+    std::map<Instruction*, bool> mem_latest;
 
     std::set<term_t> getPartialRedundantExpressions(Function &F);
     bool Used(Instruction &inst, term_t term);
     bool Transp(Instruction &inst, term_t term);
     bool DSafe(Instruction &inst, term_t term);
     bool Earliest(Instruction &inst, term_t term);
+    bool Delay(Instruction &inst, term_t term);
+    bool Latest(Instruction &inst, term_t term);
     Instruction* getBinarySuccessor(Instruction *inst);
     std::set<Instruction*> getSuccessors(Instruction *inst);
     std::set<Instruction*> getPredecessors(Instruction *inst);
@@ -152,7 +156,7 @@ bool PRE::Transp(Instruction &inst, term_t term) {
 }
 
 bool PRE::DSafe(Instruction &inst, term_t term) {
-  if (mem_dsafe[&inst]) return mem_dsafe[&inst];
+  if (mem_dsafe.find(&inst) != mem_dsafe.end()) return mem_dsafe[&inst];
 
   BasicBlock *bb = inst.getParent();
   Function *f = bb->getParent();
@@ -180,7 +184,7 @@ bool PRE::DSafe(Instruction &inst, term_t term) {
 }
 
 bool PRE::Earliest(Instruction &inst, term_t term) {
-  if (mem_earliest[&inst]) return mem_earliest[&inst];
+  if (mem_earliest.find(&inst) != mem_earliest.end()) return mem_earliest[&inst];
 
   BasicBlock *bb = inst.getParent();
   Function *f = bb->getParent();
@@ -206,6 +210,61 @@ bool PRE::Earliest(Instruction &inst, term_t term) {
   mem_earliest[&inst] = earliest;
   return earliest;
 }
+
+bool PRE::Delay(Instruction &inst, term_t term) {
+  if (mem_delay.find(&inst) != mem_delay.end()) return mem_delay[&inst];
+
+  bool delay = false;
+  if (mem_dsafe[&inst] && mem_earliest[&inst]) {
+    delay = true;
+  } else {
+    BasicBlock *bb = inst.getParent();
+    Function *f = bb->getParent();
+
+    if (&(f->front()) == bb && &(bb->front()) == &inst) { // if n == s
+      delay = false;
+    } else {
+      delay = true;
+      std::set<Instruction*> predecessors = getPredecessors(&inst);
+      for (auto I = predecessors.begin(), E = predecessors.end(); I != E; ++I) {
+        Instruction *m = *I;
+        if (!Used(*m, term) && Delay(*m, term)) continue;
+
+        delay = false;
+        break;
+      }
+    }
+  }
+
+  mem_delay[&inst] = delay;
+  return delay;
+}
+
+bool PRE::Latest(Instruction &inst, term_t term) {
+  if (mem_latest.find(&inst) != mem_latest.end()) return mem_latest[&inst];
+
+  bool latest = true;
+  if (!Delay(inst, term)) {
+    latest = false;
+  } else if (Used(inst, term)) {
+    latest = true;
+  } else {
+    bool flag = true;
+    std::set<Instruction*> successors = getSuccessors(&inst);
+    for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
+      Instruction *m = *I;
+      if (Delay(*m, term)) continue;
+
+      flag = false;
+      break;
+    }
+    latest = !flag;
+  }
+
+  mem_latest[&inst] = latest;
+  return latest;
+}
+
 
 Instruction* PRE::getBinarySuccessor(Instruction *inst) {
   BasicBlock *parent = inst->getParent();
@@ -312,7 +371,7 @@ void PRE::performSafeEarliestTransform(Function &F, term_t term) {
 
         Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
 
-        /*Value* storeInst = */dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
 
         val = allocaInst;
 
