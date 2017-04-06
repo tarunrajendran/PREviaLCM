@@ -72,6 +72,8 @@ namespace {
     void performSafeEarliestTransform(Function &F, term_t term);
     void getDSafes(Function &F, term_t term);
     void getEarliests(Function &F, term_t term);
+    void getDelays(Function &F, term_t term);
+    void getLatests(Function &F, term_t term);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -449,6 +451,34 @@ void PRE::getEarliests(Function &F, term_t term) {
   }
 }
 
+void PRE::getDelays(Function &F, term_t term) {
+  mem_delays.clear();
+
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                           RE = RPOT.end();
+       RI != RE; ++RI) {
+    BasicBlock * bb = *RI;
+    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      Delay(*inst, term);
+    }
+  }
+}
+
+void PRE::getLatests(Function &F, term_t term) {
+  mem_latest.clear();
+
+  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                IE = po_end(&F.getEntryBlock());
+                               I != IE; ++I) {
+    BasicBlock * bb = *I;
+    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      Latest(*inst, term);
+    }
+  }
+}
 
 bool PRE::runOnFunction(Function &F) {
 
