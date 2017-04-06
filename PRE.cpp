@@ -61,6 +61,7 @@ namespace {
     std::map<Instruction*, bool> mem_isolated;
 
     std::set<term_t> getPartialRedundantExpressions(Function &F);
+    Value* getAlloca(Value* val);
     bool Used(Instruction &inst, term_t term);
     bool Transp(Instruction &inst, term_t term);
     bool DSafe(Instruction &inst, term_t term);
@@ -126,8 +127,14 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
       DEBUG(dbgs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
 
       // Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
-      term_t term = makeTerm(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1), inst->getType());
-      partiallyRedundant.insert(term);
+      Value* operand1 = inst->getOperand(0);
+      Value* operand2 = inst->getOperand(1);
+      Value* alloca1 = getAlloca(operand1);
+      Value* alloca2 = getAlloca(operand2);
+      if (alloca1 && alloca2) {
+        term_t term = makeTerm(alloca1, inst->getOpcode(), alloca2, inst->getType());
+        partiallyRedundant.insert(term);
+      }
     } else {
     }
   }
@@ -135,11 +142,21 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
   return partiallyRedundant;
 }
 
+Value* PRE::getAlloca(Value* val) {
+  LoadInst* loadInst = dyn_cast<LoadInst>(val);
+  if (loadInst) {
+    return dyn_cast<Value>(loadInst->getOperand(0));
+  } else {
+    return NULL;
+  }
+}
+
+
 bool PRE::Used(Instruction &inst, term_t term) {
   // compare two operands and opcode
   if (inst.isBinaryOp()) {
-    Value* operand1 = inst.getOperand(0);
-    Value* operand2 = inst.getOperand(1);
+    Value* operand1 = getAlloca(inst.getOperand(0));
+    Value* operand2 = getAlloca(inst.getOperand(1));
     unsigned opcode = inst.getOpcode();
     if (operand1 == term_operand1(term) &&
         operand2 == term_operand2(term) &&
@@ -157,10 +174,16 @@ bool PRE::Used(Instruction &inst, term_t term) {
 bool PRE::Transp(Instruction &inst, term_t term) {
   Value* operand1 = term_operand1(term);
   Value* operand2 = term_operand2(term);
-  if ((&inst != operand1) && (&inst != operand2)) {
-    return true;
+
+  StoreInst* storeInst = dyn_cast<StoreInst>(&inst);
+  if (storeInst) {
+    if (storeInst->getOperand(0) == operand1 || storeInst->getOperand(1) == operand2) {
+      return false;
+    } else {
+      return true;
+    }
   } else {
-    return false;
+    return true;
   }
 }
 
@@ -516,7 +539,9 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
         Instruction * inst = &*it;
         if (OCP.find(inst) != OCP.end()) {
           // insert instruction
-          Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
+          auto loadInst1 = (new LoadInst(term_operand1(term), Twine(), inst));
+          auto loadInst2 = (new LoadInst(term_operand2(term), Twine(), inst));
+          Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), loadInst1, loadInst2, Twine(), inst));
           (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
         }
         if (RO.find(inst) != RO.end()) {
