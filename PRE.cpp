@@ -6,8 +6,10 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -45,6 +47,7 @@ namespace {
     // Entry point for the overall pre pass
     bool runOnFunction(Function &F);
 
+    std::set<Instruction*> mem_used;
     std::map<Instruction*, bool> mem_dsafe;
     std::map<Instruction*, bool> mem_earliest;
 
@@ -124,6 +127,7 @@ bool PRE::Used(Instruction &inst, term_t term) {
     if (operand1 == term_operand1(term) &&
         operand2 == term_operand2(term) &&
         opcode == term_opcode(term)) {
+      mem_used.insert(&inst);
       return true;
     } else {
       return false;
@@ -272,18 +276,38 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
 
 void PRE::performSafeEarliestTransform(Function &F, term_t term) {
   DEBUG(dbgs() << "#performSafeEarliestTransform\n");
-  DEBUG(dbgs() << "term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
+  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
+  mem_used.clear();
   getDSafes(F, term);
   getEarliests(F, term);
 
   // print out mem_dsafe and mem_earliest for testing
 
-  DEBUG(dbgs() << "#DSafe:\n");
+  DEBUG(dbgs() << "    #DSafe & Earliest:\n");
   for (auto &dsafe_pair : mem_dsafe) {
     Instruction* inst = dsafe_pair.first;
     bool dsafe = dsafe_pair.second;
     bool earliest = mem_earliest[inst];
-    DEBUG(dbgs() << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
+    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
+  }
+
+  // insert instruction that is both earliest and
+  for (auto &dsafe_pair : mem_dsafe) {
+    Instruction* inst = dsafe_pair.first;
+    bool dsafe = dsafe_pair.second;
+    bool earliest = mem_earliest[inst];
+    if (dsafe && earliest) {
+      BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst);
+    }
+  }
+
+  // modify used instructions
+
+
+  DEBUG(dbgs() << "#Done performScalarPREInsertion\n");
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *inst = &*I;
+    DEBUG(dbgs() << *inst << "\n");
   }
 }
 
