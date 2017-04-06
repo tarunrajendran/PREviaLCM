@@ -3,6 +3,8 @@
 #define DEBUG_TYPE "pre"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -144,8 +146,11 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
 
 Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
+  Constant* constInst = dyn_cast<Constant>(val);
   if (loadInst) {
     return dyn_cast<Value>(loadInst->getOperand(0));
+  } else if (constInst) {
+    return val;
   } else {
     return NULL;
   }
@@ -539,8 +544,18 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
         Instruction * inst = &*it;
         if (OCP.find(inst) != OCP.end()) {
           // insert instruction
-          auto loadInst1 = (new LoadInst(term_operand1(term), Twine(), inst));
-          auto loadInst2 = (new LoadInst(term_operand2(term), Twine(), inst));
+          Value* loadInst1 = term_operand1(term);
+          Value* loadInst2 = term_operand2(term);
+          if (isa<AllocaInst>(loadInst1)) {
+            loadInst1 = dyn_cast<Value>(new LoadInst(loadInst1, Twine(), inst));
+          }
+          if (isa<AllocaInst>(loadInst2)) {
+            loadInst2 = dyn_cast<Value>(new LoadInst(loadInst2, Twine(), inst));
+          }
+          DEBUG(dbgs() << "#insert h\n");
+          DEBUG(dbgs() << *loadInst1 << "\n");
+          DEBUG(dbgs() << *loadInst2 << "\n");
+
           Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), loadInst1, loadInst2, Twine(), inst));
           (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
         }
@@ -559,7 +574,9 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           // DEBUG(dbgs() << "remove operands " << numOperands << "\n");
           for (unsigned i = 0; i < numOperands; i++) {
             Value *operandToBeRemoved = inst->getOperand(i);
-            dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
+            if (!isa<Constant>(operandToBeRemoved)) {
+              dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
+            }
             // DEBUG(dbgs() << *operandToBeRemoved << "\n");
           }
 
