@@ -542,7 +542,55 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   std::set<Instruction*> OCP = getOCP(F, term);
   std::set<Instruction*> RO = getRO(F, term);
 
-  DEBUG(dbgs() << "#Done perform_OCP_RO_Transformation\n");
+  DEBUG(dbgs() << "#OCP\n");
+  for (auto I : OCP) {
+    DEBUG(dbgs() << *I << "\n");
+  }
+
+  DEBUG(dbgs() << "\n#RO\n");
+  for (auto I : RO) {
+    DEBUG(dbgs() << *I << "\n");
+  }
+
+  // insert instruction that is both earliest and
+  // and update term to load inst
+  Value *val;
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                           RE = RPOT.end();
+       RI != RE; ++RI) {
+    BasicBlock * bb = *RI;
+    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      if (OCP.find(inst) != OCP.end()) {
+        // insert instruction
+        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
+        Type *binaryOperatorType = binaryOperator->getType();
+
+        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
+
+        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+
+        val = allocaInst;
+        Changed = true;
+
+      }
+      if (RO.find(inst) != RO.end()) {
+        auto nextIt = ++it;
+        LLVMContext & C = inst->getModule()->getContext();
+        IRBuilder<> IRB(C);
+        DEBUG(dbgs() << "@@ " << *val << "\n");
+        auto loadInst = IRB.CreateLoad(val, Twine());
+        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
+        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
+        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
+        nextIt = --nextIt;
+        Changed = true;
+      }
+    }
+  }
+
+  DEBUG(dbgs() << "\n#Done perform_OCP_RO_Transformation\n");
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *inst = &*I;
     DEBUG(dbgs() << *inst << "\n");
@@ -560,7 +608,8 @@ bool PRE::runOnFunction(Function &F) {
   // for test
   std::set<term_t> terms = getPartialRedundantExpressions(F);
   for (auto term : terms) {
-    Changed = performSafeEarliestTransformation(F, term);
+    // Changed = performSafeEarliestTransformation(F, term);
+    Changed = perform_OCP_RO_Transformation(F, term);
   }
 
   /*
