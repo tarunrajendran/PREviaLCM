@@ -331,9 +331,6 @@ void PRE::performSafeEarliestTransform(Function &F, term_t term) {
     }
   }
 
-  // modify used instructions
-
-
   DEBUG(dbgs() << "#Done performScalarPREInsertion\n");
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *inst = &*I;
