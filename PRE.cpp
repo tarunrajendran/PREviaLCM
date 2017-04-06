@@ -566,38 +566,36 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
 
   // insert instruction that is both earliest and
   // and update term to load inst
-  Value *val;
-  ReversePostOrderTraversal<Function *> RPOT(&F);
-  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
-                                                           RE = RPOT.end();
-       RI != RE; ++RI) {
-    BasicBlock * bb = *RI;
-    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      if (OCP.find(inst) != OCP.end()) {
-        // insert instruction
-        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
-        Type *binaryOperatorType = binaryOperator->getType();
-
-        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
-
-        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
-
-        val = allocaInst;
-        Changed = true;
-
-      }
-      if (RO.find(inst) != RO.end()) {
-        auto nextIt = ++it;
-        LLVMContext & C = inst->getModule()->getContext();
-        IRBuilder<> IRB(C);
-        DEBUG(dbgs() << "@@ " << *val << "\n");
-        auto loadInst = IRB.CreateLoad(val, Twine());
-        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
-        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
-        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
-        nextIt = --nextIt;
-        Changed = true;
+  if (OCP.size() > 0 && RO.size() > 0) {
+    Instruction *firstInst = F.front()->front();
+    Type* binaryOperatorType = (dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), nullptr)))->getType();
+    Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), firstInst));  // alloca inst for term.
+  
+    ReversePostOrderTraversal<Function *> RPOT(&F);
+    for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                             RE = RPOT.end();
+         RI != RE; ++RI) {
+      BasicBlock * bb = *RI;
+      for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        if (OCP.find(inst) != OCP.end()) {
+          // insert instruction
+          Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
+          (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+          Changed = true;
+        }
+        if (RO.find(inst) != RO.end()) {
+          auto nextIt = ++it;
+          LLVMContext & C = inst->getModule()->getContext();
+          IRBuilder<> IRB(C);
+          DEBUG(dbgs() << "@@ " << *allocaInst << "\n");
+          auto loadInst = IRB.CreateLoad(allocaInst, Twine());
+          DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
+          ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
+          DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
+          it = --nextIt;
+          Changed = true;
+        }
       }
     }
   }
