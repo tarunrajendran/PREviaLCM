@@ -32,16 +32,18 @@ using namespace std;
 // STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
 // STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
 
-typedef pair< pair<Value*, Value*>, unsigned > term_t;
-term_t makeTerm(Value* operand1, unsigned opcode, Value* operand2) {
+typedef pair< pair< pair<Value*, Value*>, unsigned >, Type* > term_t;
+term_t makeTerm(Value* operand1, unsigned opcode, Value* operand2, Type* type) {
   pair<Value*, Value*> operands(operand1, operand2);
-  term_t term(operands, opcode);
+  pair< pair<Value*, Value*>, unsigned > real_term(operands, opcode);
+  term_t term(real_term, type);
   return term;
 }
 
-#define term_operand1(term) (term.first.first)
-#define term_operand2(term) (term.first.second)
-#define term_opcode(term) (term.second)
+#define term_operand1(term) (term.first.first.first)
+#define term_operand2(term) (term.first.first.second)
+#define term_opcode(term) (term.first.second)
+#define term_type(term) (term.second)
 
 namespace {
   struct PRE : public FunctionPass {
@@ -124,7 +126,7 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
       DEBUG(dbgs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
 
       // Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
-      term_t term = makeTerm(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
+      term_t term = makeTerm(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1), inst->getType());
       partiallyRedundant.insert(term);
     } else {
     }
@@ -503,8 +505,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   if (OCP.size() > 0 && RO.size() > 0) {
     Changed = true;
     Instruction *firstInst = &(F.front().front());
-    Type* binaryOperatorType = (dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine())))->getType();
-    Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), firstInst));  // alloca inst for term.
+    Value* allocaInst = dyn_cast<Value>(new AllocaInst(term_type(term), Twine(), firstInst));  // alloca inst for term.
 
     ReversePostOrderTraversal<Function *> RPOT(&F);
     for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
@@ -551,7 +552,9 @@ bool PRE::runOnFunction(Function &F) {
   // for test
   std::set<term_t> terms = getPartialRedundantExpressions(F);
   for (auto term : terms) {
-    Changed = perform_OCP_RO_Transformation(F, term);
+    if(perform_OCP_RO_Transformation(F, term)) {
+      Changed = true;
+    }
   }
 
   /*
@@ -564,6 +567,9 @@ bool PRE::runOnFunction(Function &F) {
   */
 
   DEBUG(dbgs() << "#### Done PRE ####\n");
-
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *inst = &*I;
+    DEBUG(dbgs() << *inst << "\n");
+  }
   return Changed;
 }
