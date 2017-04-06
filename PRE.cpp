@@ -223,7 +223,7 @@ bool PRE::Delay(Instruction &inst, term_t term) {
   if (mem_delay.find(&inst) != mem_delay.end()) return mem_delay[&inst];
 
   bool delay = false;
-  if (mem_dsafe[&inst] && mem_earliest[&inst]) {
+  if (DSafe(inst, term) && Earliest(inst, term)) {
     delay = true;
   } else {
     BasicBlock *bb = inst.getParent();
@@ -280,9 +280,10 @@ bool PRE::Isolated(Instruction &inst, term_t term) {
   std::set<Instruction*> successors = getSuccessors(&inst);
   for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
     Instruction *m = *I;
-    if (Latest(*m, term) || (
-        !Used(*m, term) && Isolated(*m, term)
-    )) continue;
+    if (Latest(*m, term) ||
+       (!Used(*m, term) &&
+        Isolated(*m, term))
+    ) continue;
 
     isolated = false;
     break;
