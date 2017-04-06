@@ -551,8 +551,19 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           DEBUG(dbgs() << "@@ " << *allocaInst << "\n");
           auto loadInst = IRB.CreateLoad(allocaInst, Twine());
           DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
+
           ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
-          DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
+
+          // erase all operands of inst
+          unsigned numOperands = inst->getNumOperands();
+          // DEBUG(dbgs() << "remove operands " << numOperands << "\n");
+          for (unsigned i = 0; i < numOperands; i++) {
+            Value *operandToBeRemoved = inst->getOperand(i);
+            dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
+            // DEBUG(dbgs() << *operandToBeRemoved << "\n");
+          }
+
+          // DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
           it = --nextIt;
         }
       }
