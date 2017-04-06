@@ -540,6 +540,17 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   getLatests(F, term);
   getIsolateds(F, term);
 
+  DEBUG(dbgs() << "#Stats\n");
+  for (auto &dsafe_pair : mem_dsafe) {
+    Instruction* inst = dsafe_pair.first;
+    bool dsafe = dsafe_pair.second;
+    bool earliest = mem_earliest[inst];
+    bool delay = mem_delay[inst];
+    bool latest = mem_latest[inst];
+    bool isolated = mem_isolated[inst];
+    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
+  }
+
   std::set<Instruction*> OCP = getOCP(F, term);
   std::set<Instruction*> RO = getRO(F, term);
 
@@ -621,6 +632,8 @@ bool PRE::runOnFunction(Function &F) {
     DEBUG(dbgs() << *inst << "\n");
   }
   */
+
+  DEBUG(dbgs() << "#### Done PRE ####\n");
 
   return Changed;
 }
