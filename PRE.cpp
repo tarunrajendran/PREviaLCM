@@ -76,7 +76,6 @@ namespace {
     void getIsolateds(Function &F, term_t term);
     std::set<Instruction*> getOCP(Function &F, term_t term);
     std::set<Instruction*> getRO(Function &F, term_t term);
-    bool performSafeEarliestTransformation(Function &F, term_t term);
     bool perform_OCP_RO_Transformation(Function &F, term_t term);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
@@ -465,71 +464,6 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
   return RO;
 }
 
-bool PRE::performSafeEarliestTransformation(Function &F, term_t term) {
-  bool Changed = false;
-  DEBUG(dbgs() << "#performSafeEarliestTransformation\n");
-  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
-  mem_used.clear();
-  getDSafes(F, term);
-  getEarliests(F, term);
-
-  // print out mem_dsafe and mem_earliest for testing
-
-  DEBUG(dbgs() << "    #DSafe & Earliest:\n");
-  for (auto &dsafe_pair : mem_dsafe) {
-    Instruction* inst = dsafe_pair.first;
-    bool dsafe = dsafe_pair.second;
-    bool earliest = mem_earliest[inst];
-    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
-  }
-
-  // insert instruction that is both earliest and
-  // and update term to load inst
-  Value *val;
-  ReversePostOrderTraversal<Function *> RPOT(&F);
-  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
-                                                           RE = RPOT.end();
-       RI != RE; ++RI) {
-    BasicBlock * bb = *RI;
-    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      if (mem_dsafe[inst] && mem_earliest[inst]) {
-        // insert instruction
-        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
-        Type *binaryOperatorType = binaryOperator->getType();
-
-        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
-
-        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
-
-        val = allocaInst;
-        Changed = true;
-
-      }
-      if (mem_used.find(inst) != mem_used.end()) {
-        auto nextIt = ++it;
-        LLVMContext & C = inst->getModule()->getContext();
-        IRBuilder<> IRB(C);
-        DEBUG(dbgs() << "@@ " << *val << "\n");
-        auto loadInst = IRB.CreateLoad(val, Twine());
-        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
-        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
-        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
-        nextIt = --nextIt;
-        Changed = true;
-      }
-    }
-  }
-
-  DEBUG(dbgs() << "#Done performScalarPREInsertion\n");
-  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    Instruction *inst = &*I;
-    DEBUG(dbgs() << *inst << "\n");
-  }
-
-  return Changed;
-}
-
 bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   bool Changed = false;
   DEBUG(dbgs() << "#perform_OCP_RO_Transformation\n");
@@ -567,10 +501,11 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   // insert instruction that is both earliest and
   // and update term to load inst
   if (OCP.size() > 0 && RO.size() > 0) {
-    Instruction *firstInst = F.front()->front();
-    Type* binaryOperatorType = (dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), nullptr)))->getType();
+    Changed = true;
+    Instruction *firstInst = &(F.front().front());
+    Type* binaryOperatorType = (dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine())))->getType();
     Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), firstInst));  // alloca inst for term.
-  
+
     ReversePostOrderTraversal<Function *> RPOT(&F);
     for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
                                                              RE = RPOT.end();
@@ -582,7 +517,6 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           // insert instruction
           Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
           (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
-          Changed = true;
         }
         if (RO.find(inst) != RO.end()) {
           auto nextIt = ++it;
@@ -594,7 +528,6 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
           DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
           it = --nextIt;
-          Changed = true;
         }
       }
     }
@@ -618,7 +551,6 @@ bool PRE::runOnFunction(Function &F) {
   // for test
   std::set<term_t> terms = getPartialRedundantExpressions(F);
   for (auto term : terms) {
-    // Changed = performSafeEarliestTransformation(F, term);
     Changed = perform_OCP_RO_Transformation(F, term);
   }
 
