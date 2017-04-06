@@ -7,30 +7,26 @@ target triple = "x86_64-apple-macosx10.12.0"
 define i32 @main() #0 {
   %1 = alloca i32, align 4
   %2 = alloca i32, align 4
-  %3 = alloca i32, align 4
-  %4 = alloca i32, align 4
-  %5 = alloca i32, align 4
-  store i32 0, i32* %1, align 4
-  store i32 1, i32* %2, align 4
-  store i32 2, i32* %3, align 4
+  store i32 1, i32* %1, align 4
+  store i32 2, i32* %2, align 4
+  %3 = load i32, i32* %2, align 4
+  %4 = icmp ne i32 %3, 0
+
+  %5 = load i32, i32* %1, align 4
   %6 = load i32, i32* %2, align 4
-  %7 = icmp ne i32 %6, 0
 
-  %8 = load i32, i32* %2, align 4
-  %9 = load i32, i32* %3, align 4
+  br i1 %4, label %7, label %9
 
-  br i1 %7, label %10, label %12
+; <label>:7:
+  %8 = add nsw i32 %5, %6
+  br label %10
 
-; <label>:10:                                      ; preds = %0
-  %11 = add nsw i32 %8, %9
-  store i32 %11, i32* %4, align 4
-  br label %12
+; <label>:9:
+  br label %10
 
-; <label>:12:                                     ; preds = %8, %0
-  %13 = add nsw i32 %8, %9
-  store i32 %13, i32* %5, align 4
-  %14 = load i32, i32* %5, align 4
-  ret i32 %14
+; <label>:10:
+  %11 = add nsw i32 %5, %6
+  ret i32 %11
 }
 
 attributes #0 = { nounwind ssp uwtable "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="penryn" "target-features"="+cx16,+fxsr,+mmx,+sse,+sse2,+sse3,+sse4.1,+ssse3" "unsafe-fp-math"="false" "use-soft-float"="false" }
