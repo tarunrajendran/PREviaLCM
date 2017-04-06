@@ -69,12 +69,15 @@ namespace {
     Instruction* getBinarySuccessor(Instruction *inst);
     std::set<Instruction*> getSuccessors(Instruction *inst);
     std::set<Instruction*> getPredecessors(Instruction *inst);
-    void performSafeEarliestTransform(Function &F, term_t term);
     void getDSafes(Function &F, term_t term);
     void getEarliests(Function &F, term_t term);
     void getDelays(Function &F, term_t term);
     void getLatests(Function &F, term_t term);
     void getIsolateds(Function &F, term_t term);
+    std::set<Instruction*> getOCP(Function &F, term_t term);
+    std::set<Instruction*> getRO(Function &F, term_t term);
+    bool performSafeEarliestTransformation(Function &F, term_t term);
+    bool perform_OCP_RO_Transformation(Function &F, term_t term);
 
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -362,66 +365,6 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
   return predecessorsSet;
 }
 
-void PRE::performSafeEarliestTransform(Function &F, term_t term) {
-  DEBUG(dbgs() << "#performSafeEarliestTransform\n");
-  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
-  mem_used.clear();
-  getDSafes(F, term);
-  getEarliests(F, term);
-
-  // print out mem_dsafe and mem_earliest for testing
-
-  DEBUG(dbgs() << "    #DSafe & Earliest:\n");
-  for (auto &dsafe_pair : mem_dsafe) {
-    Instruction* inst = dsafe_pair.first;
-    bool dsafe = dsafe_pair.second;
-    bool earliest = mem_earliest[inst];
-    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
-  }
-
-  // insert instruction that is both earliest and
-  // and update term to load inst
-  Value *val;
-  ReversePostOrderTraversal<Function *> RPOT(&F);
-  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
-                                                           RE = RPOT.end();
-       RI != RE; ++RI) {
-    BasicBlock * bb = *RI;
-    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      if (mem_dsafe[inst] && mem_earliest[inst]) {
-        // insert instruction
-        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
-        Type *binaryOperatorType = binaryOperator->getType();
-
-        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
-
-        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
-
-        val = allocaInst;
-
-      }
-      if (mem_used.find(inst) != mem_used.end()) {
-        auto nextIt = ++it;
-        LLVMContext & C = inst->getModule()->getContext();
-        IRBuilder<> IRB(C);
-        DEBUG(dbgs() << "@@ " << *val << "\n");
-        auto loadInst = IRB.CreateLoad(val, Twine());
-        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
-        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
-        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
-        nextIt = --nextIt;
-      }
-    }
-  }
-
-  DEBUG(dbgs() << "#Done performScalarPREInsertion\n");
-  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    Instruction *inst = &*I;
-    DEBUG(dbgs() << *inst << "\n");
-  }
-}
-
 // backwards
 void PRE::getDSafes(Function &F, term_t term) {
   mem_dsafe.clear();
@@ -453,7 +396,7 @@ void PRE::getEarliests(Function &F, term_t term) {
 }
 
 void PRE::getDelays(Function &F, term_t term) {
-  mem_delays.clear();
+  mem_delay.clear();
 
   ReversePostOrderTraversal<Function *> RPOT(&F);
   for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
@@ -495,6 +438,119 @@ void PRE::getIsolateds(Function &F, term_t term) {
   }
 }
 
+std::set<Instruction*> PRE::getOCP(Function &F, term_t term) {
+  std::set<Instruction*> OCP;
+
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *n = &*I;
+    if (Latest(*n, term) && !Isolated(*n, term)) {
+      OCP.insert(n);
+    }
+  }
+
+  return OCP;
+}
+
+std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
+  std::set<Instruction*> RO;
+
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *n = &*I;
+    if (Used(*n, term) && !(Latest(*n, term) && Isolated(*n, term))) {
+      RO.insert(n);
+    }
+  }
+
+  return RO;
+}
+
+bool PRE::performSafeEarliestTransformation(Function &F, term_t term) {
+  bool Changed = false;
+  DEBUG(dbgs() << "#performSafeEarliestTransformation\n");
+  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
+  mem_used.clear();
+  getDSafes(F, term);
+  getEarliests(F, term);
+
+  // print out mem_dsafe and mem_earliest for testing
+
+  DEBUG(dbgs() << "    #DSafe & Earliest:\n");
+  for (auto &dsafe_pair : mem_dsafe) {
+    Instruction* inst = dsafe_pair.first;
+    bool dsafe = dsafe_pair.second;
+    bool earliest = mem_earliest[inst];
+    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << "\n");
+  }
+
+  // insert instruction that is both earliest and
+  // and update term to load inst
+  Value *val;
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                           RE = RPOT.end();
+       RI != RE; ++RI) {
+    BasicBlock * bb = *RI;
+    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+      Instruction * inst = &*it;
+      if (mem_dsafe[inst] && mem_earliest[inst]) {
+        // insert instruction
+        Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), term_operand1(term), term_operand2(term), Twine(), inst));
+        Type *binaryOperatorType = binaryOperator->getType();
+
+        Value* allocaInst = dyn_cast<Value>(new AllocaInst(binaryOperatorType, Twine(), inst));
+
+        (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+
+        val = allocaInst;
+        Changed = true;
+
+      }
+      if (mem_used.find(inst) != mem_used.end()) {
+        auto nextIt = ++it;
+        LLVMContext & C = inst->getModule()->getContext();
+        IRBuilder<> IRB(C);
+        DEBUG(dbgs() << "@@ " << *val << "\n");
+        auto loadInst = IRB.CreateLoad(val, Twine());
+        DEBUG(dbgs() << "    replace to: " << *loadInst << "\n");
+        ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
+        DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
+        nextIt = --nextIt;
+        Changed = true;
+      }
+    }
+  }
+
+  DEBUG(dbgs() << "#Done performScalarPREInsertion\n");
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *inst = &*I;
+    DEBUG(dbgs() << *inst << "\n");
+  }
+
+  return Changed;
+}
+
+bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
+  bool Changed = false;
+  DEBUG(dbgs() << "#perform_OCP_RO_Transformation\n");
+  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
+  getDSafes(F, term);
+  getEarliests(F, term);
+  getDelays(F, term);
+  getLatests(F, term);
+  getIsolateds(F, term);
+
+  std::set<Instruction*> OCP = getOCP(F, term);
+  std::set<Instruction*> RO = getRO(F, term);
+
+  DEBUG(dbgs() << "#Done perform_OCP_RO_Transformation\n");
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *inst = &*I;
+    DEBUG(dbgs() << *inst << "\n");
+  }
+
+  return Changed;
+}
+
 bool PRE::runOnFunction(Function &F) {
 
   bool Changed = false;
@@ -504,7 +560,7 @@ bool PRE::runOnFunction(Function &F) {
   // for test
   std::set<term_t> terms = getPartialRedundantExpressions(F);
   for (auto term : terms) {
-    performSafeEarliestTransform(F, term);
+    Changed = performSafeEarliestTransformation(F, term);
   }
 
   /*
@@ -517,5 +573,4 @@ bool PRE::runOnFunction(Function &F) {
   */
 
   return Changed;
-
 }
