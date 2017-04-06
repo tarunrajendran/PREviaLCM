@@ -56,6 +56,7 @@ namespace {
     std::map<Instruction*, bool> mem_earliest;
     std::map<Instruction*, bool> mem_delay;
     std::map<Instruction*, bool> mem_latest;
+    std::map<Instruction*, bool> mem_isolated;
 
     std::set<term_t> getPartialRedundantExpressions(Function &F);
     bool Used(Instruction &inst, term_t term);
@@ -64,6 +65,7 @@ namespace {
     bool Earliest(Instruction &inst, term_t term);
     bool Delay(Instruction &inst, term_t term);
     bool Latest(Instruction &inst, term_t term);
+    bool Isolated(Instruction &inst, term_t term);
     Instruction* getBinarySuccessor(Instruction *inst);
     std::set<Instruction*> getSuccessors(Instruction *inst);
     std::set<Instruction*> getPredecessors(Instruction *inst);
@@ -264,6 +266,26 @@ bool PRE::Latest(Instruction &inst, term_t term) {
   mem_latest[&inst] = latest;
   return latest;
 }
+
+bool PRE::Isolated(Instruction &inst, term_t term) {
+  if (mem_isolated.find(&inst) != mem_isolated.end()) return mem_isolated[&inst];
+
+  bool isolated = true;
+  std::set<Instruction*> successors = getSuccessors(&inst);
+  for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
+    Instruction *m = *I;
+    if (Latest(*m, term) || (
+        !Used(*m, term) && Isolated(*m, term)
+    )) continue;
+
+    isolated = false;
+    break;
+  }
+
+  mem_isolated[&inst] = isolated;
+  return isolated;
+}
+
 
 
 Instruction* PRE::getBinarySuccessor(Instruction *inst) {
