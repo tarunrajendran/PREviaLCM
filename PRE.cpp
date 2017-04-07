@@ -31,8 +31,8 @@
 using namespace llvm;
 using namespace std;
 
-// STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
-// STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
+STATISTIC(NumInstInserted, "Number of instructions inserted for PRE via Lazy Code Motion");
+STATISTIC(NumInstReplaced, "Number of instructions Replaced for PRE via Lazy Code Motion");
 
 typedef pair< pair< pair<Value*, Value*>, unsigned >, Type* > term_t;
 term_t makeTerm(Value* operand1, unsigned opcode, Value* operand2, Type* type) {
@@ -558,6 +558,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
 
           Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), loadInst1, loadInst2, Twine(), inst));
           (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
+          NumInstInserted++;
         }
         if (RO.find(inst) != RO.end()) {
           auto nextIt = ++it;
@@ -582,6 +583,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
 
           // DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
           it = --nextIt;
+          NumInstReplaced++;
         }
       }
     }

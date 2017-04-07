@@ -2,4 +2,3 @@
 *.bc
 *.s
 *.ll
-!test1-pre.ll
