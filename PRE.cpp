@@ -32,7 +32,7 @@ using namespace llvm;
 using namespace std;
 
 STATISTIC(NumInstInserted, "Number of instructions inserted for PRE via Lazy Code Motion");
-STATISTIC(NumInstReplaced, "Number of instructions Replaced for PRE via Lazy Code Motion");
+STATISTIC(NumInstReplaced, "Number of instructions replaced for PRE via Lazy Code Motion");
 
 typedef pair< pair< pair<Value*, Value*>, unsigned >, Type* > term_t;
 term_t makeTerm(Value* operand1, unsigned opcode, Value* operand2, Type* type) {
@@ -61,9 +61,13 @@ namespace {
     std::map<Instruction*, bool> mem_delay;
     std::map<Instruction*, bool> mem_latest;
     std::map<Instruction*, bool> mem_isolated;
+    Instruction* startNode;
+    Instruction* endNode;
 
     std::set<term_t> getPartialRedundantExpressions(Function &F);
     Value* getAlloca(Value* val);
+    Instruction* getStartNode(Function &F);
+    Instruction* getEndNode(Function &F);
     bool Used(Instruction &inst, term_t term);
     bool Transp(Instruction &inst, term_t term);
     bool DSafe(Instruction &inst, term_t term);
@@ -144,6 +148,19 @@ std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
   return partiallyRedundant;
 }
 
+Instruction* PRE::getStartNode(Function &F) {
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+  BasicBlock *bb = *(RPOT.begin());
+  Instruction *inst = &*(bb->begin());
+  return inst;
+}
+
+Instruction* PRE::getEndNode(Function &F) {
+  BasicBlock *bb = *(po_begin(&F.getEntryBlock()));
+  Instruction *inst = &*(bb->rbegin());
+  return inst;
+}
+
 Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
   Constant* constInst = dyn_cast<Constant>(val);
@@ -195,11 +212,8 @@ bool PRE::Transp(Instruction &inst, term_t term) {
 bool PRE::DSafe(Instruction &inst, term_t term) {
   if (mem_dsafe.find(&inst) != mem_dsafe.end()) return mem_dsafe[&inst];
 
-  BasicBlock *bb = inst.getParent();
-  Function *f = bb->getParent();
-
   bool dsafe = false;
-  if (bb == &(f->back()) && (&inst) == &(bb->back()))  {  // if n == e
+  if (endNode == &inst) {  // if n == e
     dsafe = false;
   } else if (Used(inst, term)) {
     dsafe = true;
@@ -223,11 +237,8 @@ bool PRE::DSafe(Instruction &inst, term_t term) {
 bool PRE::Earliest(Instruction &inst, term_t term) {
   if (mem_earliest.find(&inst) != mem_earliest.end()) return mem_earliest[&inst];
 
-  BasicBlock *bb = inst.getParent();
-  Function *f = bb->getParent();
-
   bool earliest = false;
-  if (&(f->front()) == bb && &(bb->front()) == &inst) { // if n == s
+  if (startNode == &inst) { // if n == s
     earliest = true;
   } else {
     std::set<Instruction*> predecessors = getPredecessors(&inst);
@@ -255,10 +266,7 @@ bool PRE::Delay(Instruction &inst, term_t term) {
   if (DSafe(inst, term) && Earliest(inst, term)) {
     delay = true;
   } else {
-    BasicBlock *bb = inst.getParent();
-    Function *f = bb->getParent();
-
-    if (&(f->front()) == bb && &(bb->front()) == &inst) { // if n == s
+    if (startNode == &inst) { // if n == s
       delay = false;
     } else {
       delay = true;
@@ -497,7 +505,8 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
 bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   bool Changed = false;
   DEBUG(dbgs() << "#perform_OCP_RO_Transformation\n");
-  DEBUG(dbgs() << "    term: " << *(term_operand1(term)) << " " << term_opcode(term) << " " << *(term_operand2(term)) << "\n");
+  startNode = getStartNode(F);
+  endNode = getEndNode(F);
   getDSafes(F, term);
   getEarliests(F, term);
   getDelays(F, term);
