@@ -55,7 +55,6 @@ namespace {
     // Entry point for the overall pre pass
     bool runOnFunction(Function &F);
 
-    std::set<Instruction*> mem_used;
     std::map<Instruction*, bool> mem_dsafe;
     std::map<Instruction*, bool> mem_earliest;
     std::map<Instruction*, bool> mem_delay;
@@ -183,7 +182,6 @@ bool PRE::Used(Instruction &inst, term_t term) {
     if (operand1 == term_operand1(term) &&
         operand2 == term_operand2(term) &&
         opcode == term_opcode(term)) {
-      mem_used.insert(&inst);
       return true;
     } else {
       return false;
@@ -412,7 +410,9 @@ void PRE::getDSafes(Function &F, term_t term) {
     BasicBlock * bb = *I;
     for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
       Instruction * inst = &*it;
-      DSafe(*inst, term);
+      DEBUG(dbgs() << "getDSafes " << *inst << "\n");
+      bool dsafe = DSafe(*inst, term);
+      DEBUG(dbgs() << "done getDSafes " << dsafe << "\n");
     }
   }
 }
@@ -507,11 +507,18 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   DEBUG(dbgs() << "#perform_OCP_RO_Transformation\n");
   startNode = getStartNode(F);
   endNode = getEndNode(F);
+  DEBUG(dbgs() << "end node: " << *endNode << "\n");
+  DEBUG(dbgs() << "Begin getDSafes\n");
   getDSafes(F, term);
+  DEBUG(dbgs() << "Begin getEarliests\n");
   getEarliests(F, term);
+  DEBUG(dbgs() << "Begin getDelays\n");
   getDelays(F, term);
+  DEBUG(dbgs() << "Begin getLatests\n");
   getLatests(F, term);
+  DEBUG(dbgs() << "Begin getIsolateds\n");
   getIsolateds(F, term);
+  DEBUG(dbgs() << "Done gettings sets\n");
 
   DEBUG(dbgs() << "#Stats\n");
   for (auto &dsafe_pair : mem_dsafe) {
