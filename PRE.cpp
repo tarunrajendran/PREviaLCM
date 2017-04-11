@@ -63,7 +63,7 @@ namespace {
     Instruction* startNode;
     Instruction* endNode;
 
-    std::set<term_t> getPartialRedundantExpressions(Function &F);
+    std::set<term_t> getPartiallyRedundantExpressions(Function &F);
     Value* getAlloca(Value* val);
     Instruction* getStartNode(Function &F);
     Instruction* getEndNode(Function &F);
@@ -117,7 +117,7 @@ FunctionPass *createPartialRedundancyEliminationPass() { return new PRE(); }
 // Entry point for the overall PartialRedundancyElimination function pass.
 // This function is provided to you.
 
-std::set<term_t> PRE::getPartialRedundantExpressions(Function &F) {
+std::set<term_t> PRE::getPartiallyRedundantExpressions(Function &F) {
   std::set<term_t> partiallyRedundant;
 
   // http://llvm.org/docs/ProgrammersManual.html#iterating-over-the-instruction-in-a-function
@@ -207,9 +207,9 @@ bool PRE::Transp(Instruction &inst, term_t term) {
   }
 }
 
+// return changed or not.
 bool PRE::DSafe(Instruction &inst, term_t term) {
-  if (mem_dsafe.find(&inst) != mem_dsafe.end()) return mem_dsafe[&inst];
-
+  // DEBUG(dbgs() << "DSafe: " << inst << "\n");
   bool dsafe = false;
   if (endNode == &inst) {  // if n == e
     dsafe = false;
@@ -219,7 +219,9 @@ bool PRE::DSafe(Instruction &inst, term_t term) {
     dsafe = true;
     std::set<Instruction*> successors = getSuccessors(&inst);
     for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
-      if (!DSafe(**I, term)) {
+      Instruction *m = *I;
+      if (mem_dsafe.find(m) == mem_dsafe.end()) continue; // instruction not calculated yet.
+      if (!mem_dsafe[m]) {
         dsafe = false;
         break;
       }
@@ -228,13 +230,16 @@ bool PRE::DSafe(Instruction &inst, term_t term) {
     dsafe = false;
   }
 
-  mem_dsafe[&inst] = dsafe;
-  return dsafe;
+  if (mem_dsafe.find(&inst) == mem_dsafe.end() ||
+      mem_dsafe[&inst] != dsafe) {
+    mem_dsafe[&inst] = dsafe;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool PRE::Earliest(Instruction &inst, term_t term) {
-  if (mem_earliest.find(&inst) != mem_earliest.end()) return mem_earliest[&inst];
-
   bool earliest = false;
   if (startNode == &inst) { // if n == s
     earliest = true;
@@ -243,25 +248,29 @@ bool PRE::Earliest(Instruction &inst, term_t term) {
     earliest = false;
     for (auto I = predecessors.begin(), E = predecessors.end(); I != E; ++I) {
       Instruction *m = *I;
+      if (mem_earliest.find(m) == mem_earliest.end()) continue;
       if (!Transp(*m, term)) {
         earliest = true;
         break;
-      } else if (!DSafe(*m, term) && Earliest(*m, term)) {
+      } else if (!mem_dsafe[m] && mem_earliest[m]) {
         earliest = true;
         break;
       }
     }
   }
 
-  mem_earliest[&inst] = earliest;
-  return earliest;
+  if (mem_earliest.find(&inst) == mem_earliest.end() ||
+      mem_earliest[&inst] != earliest) {
+    mem_earliest[&inst] = earliest;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool PRE::Delay(Instruction &inst, term_t term) {
-  if (mem_delay.find(&inst) != mem_delay.end()) return mem_delay[&inst];
-
   bool delay = false;
-  if (DSafe(inst, term) && Earliest(inst, term)) {
+  if (mem_dsafe[&inst] && mem_earliest[&inst]) {
     delay = true;
   } else {
     if (startNode == &inst) { // if n == s
@@ -271,7 +280,8 @@ bool PRE::Delay(Instruction &inst, term_t term) {
       std::set<Instruction*> predecessors = getPredecessors(&inst);
       for (auto I = predecessors.begin(), E = predecessors.end(); I != E; ++I) {
         Instruction *m = *I;
-        if (!Used(*m, term) && Delay(*m, term)) continue;
+        if (mem_delay.find(m) == mem_delay.end()) continue;
+        if (!Used(*m, term) && mem_delay[m]) continue;
 
         delay = false;
         break;
@@ -279,15 +289,18 @@ bool PRE::Delay(Instruction &inst, term_t term) {
     }
   }
 
-  mem_delay[&inst] = delay;
-  return delay;
+  if (mem_delay.find(&inst) == mem_delay.end() ||
+      mem_delay[&inst] != delay) {
+    mem_delay[&inst] = delay;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool PRE::Latest(Instruction &inst, term_t term) {
-  if (mem_latest.find(&inst) != mem_latest.end()) return mem_latest[&inst];
-
   bool latest = true;
-  if (!Delay(inst, term)) {
+  if (!mem_delay[&inst]) {
     latest = false;
   } else if (Used(inst, term)) {
     latest = true;
@@ -296,7 +309,8 @@ bool PRE::Latest(Instruction &inst, term_t term) {
     std::set<Instruction*> successors = getSuccessors(&inst);
     for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
       Instruction *m = *I;
-      if (Delay(*m, term)) continue;
+      if (mem_latest.find(m) == mem_latest.end()) continue;
+      if (mem_delay[m]) continue;
 
       flag = false;
       break;
@@ -304,28 +318,37 @@ bool PRE::Latest(Instruction &inst, term_t term) {
     latest = !flag;
   }
 
-  mem_latest[&inst] = latest;
-  return latest;
+  if (mem_latest.find(&inst) == mem_latest.end() ||
+      mem_latest[&inst] != latest) {
+    mem_latest[&inst] = latest;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool PRE::Isolated(Instruction &inst, term_t term) {
-  if (mem_isolated.find(&inst) != mem_isolated.end()) return mem_isolated[&inst];
-
   bool isolated = true;
   std::set<Instruction*> successors = getSuccessors(&inst);
   for (auto I = successors.begin(), E = successors.end(); I != E; ++I) {
     Instruction *m = *I;
-    if (Latest(*m, term) ||
+    if (mem_isolated.find(m) == mem_isolated.end()) continue;
+    if (mem_latest[m] ||
        (!Used(*m, term) &&
-        Isolated(*m, term))
+        mem_isolated[m])
     ) continue;
 
     isolated = false;
     break;
   }
 
-  mem_isolated[&inst] = isolated;
-  return isolated;
+  if (mem_isolated.find(&inst) == mem_isolated.end() ||
+      mem_isolated[&inst] != isolated) {
+    mem_isolated[&inst] = isolated;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 
@@ -404,15 +427,17 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
 // backwards
 void PRE::getDSafes(Function &F, term_t term) {
   mem_dsafe.clear();
-  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
-                                IE = po_end(&F.getEntryBlock());
-                               I != IE; ++I) {
-    BasicBlock * bb = *I;
-    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      DEBUG(dbgs() << "getDSafes " << *inst << "\n");
-      bool dsafe = DSafe(*inst, term);
-      DEBUG(dbgs() << "done getDSafes " << dsafe << "\n");
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                  IE = po_end(&F.getEntryBlock());
+                                 I != IE; ++I) {
+      BasicBlock * bb = *I;
+      for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        changed = DSafe(*inst, term) || changed;
+      }
     }
   }
 }
@@ -420,58 +445,70 @@ void PRE::getDSafes(Function &F, term_t term) {
 // forwards
 void PRE::getEarliests(Function &F, term_t term) {
   mem_earliest.clear();
-
-  ReversePostOrderTraversal<Function *> RPOT(&F);
-  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
-                                                           RE = RPOT.end();
-       RI != RE; ++RI) {
-    BasicBlock * bb = *RI;
-    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      Earliest(*inst, term);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    ReversePostOrderTraversal<Function *> RPOT(&F);
+    for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                             RE = RPOT.end();
+         RI != RE; ++RI) {
+      BasicBlock * bb = *RI;
+      for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        changed = Earliest(*inst, term) || changed;
+      }
     }
   }
 }
 
 void PRE::getDelays(Function &F, term_t term) {
   mem_delay.clear();
-
-  ReversePostOrderTraversal<Function *> RPOT(&F);
-  for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
-                                                           RE = RPOT.end();
-       RI != RE; ++RI) {
-    BasicBlock * bb = *RI;
-    for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      Delay(*inst, term);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    ReversePostOrderTraversal<Function *> RPOT(&F);
+    for (ReversePostOrderTraversal<Function *>::rpo_iterator RI = RPOT.begin(),
+                                                             RE = RPOT.end();
+         RI != RE; ++RI) {
+      BasicBlock * bb = *RI;
+      for (auto it = bb->begin(), ite = bb->end(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        changed = Delay(*inst, term) || changed;
+      }
     }
   }
 }
 
 void PRE::getLatests(Function &F, term_t term) {
   mem_latest.clear();
-
-  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
-                                IE = po_end(&F.getEntryBlock());
-                               I != IE; ++I) {
-    BasicBlock * bb = *I;
-    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      Latest(*inst, term);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                  IE = po_end(&F.getEntryBlock());
+                                 I != IE; ++I) {
+      BasicBlock * bb = *I;
+      for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        changed = Latest(*inst, term) || changed;
+      }
     }
   }
 }
 
 void PRE::getIsolateds(Function &F, term_t term) {
   mem_isolated.clear();
-
-  for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
-                                IE = po_end(&F.getEntryBlock());
-                               I != IE; ++I) {
-    BasicBlock * bb = *I;
-    for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
-      Instruction * inst = &*it;
-      Isolated(*inst, term);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (po_iterator<BasicBlock *> I = po_begin(&F.getEntryBlock()),
+                                  IE = po_end(&F.getEntryBlock());
+                                 I != IE; ++I) {
+      BasicBlock * bb = *I;
+      for (auto it = bb->rbegin(), ite = bb->rend(); it != ite; ++it) {
+        Instruction * inst = &*it;
+        changed = Isolated(*inst, term) || changed;
+      }
     }
   }
 }
@@ -621,7 +658,7 @@ bool PRE::runOnFunction(Function &F) {
   DEBUG(dbgs() << "#### PRE ####\n");
 
   // for test
-  std::set<term_t> terms = getPartialRedundantExpressions(F);
+  std::set<term_t> terms = getPartiallyRedundantExpressions(F);
   for (auto term : terms) {
     if(perform_OCP_RO_Transformation(F, term)) {
       Changed = true;
