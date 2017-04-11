@@ -518,7 +518,7 @@ std::set<Instruction*> PRE::getOCP(Function &F, term_t term) {
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *n = &*I;
-    if (Latest(*n, term) && !Isolated(*n, term)) {
+    if (mem_latest[n] && !mem_isolated[n]) {
       OCP.insert(n);
     }
   }
@@ -531,7 +531,7 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
 
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *n = &*I;
-    if (Used(*n, term) && !(Latest(*n, term) && Isolated(*n, term))) {
+    if (Used(*n, term) && !(mem_latest[n] && mem_isolated[n])) {
       RO.insert(n);
     }
   }
