@@ -63,6 +63,7 @@ namespace {
     Instruction* startNode;
     Instruction* endNode;
 
+    bool isPartiallyRedundant(term_t &term);
     std::set<term_t> getPartiallyRedundantExpressions(Function &F);
     Value* getAlloca(Value* val);
     Instruction* getStartNode(Function &F);
@@ -117,6 +118,10 @@ FunctionPass *createPartialRedundancyEliminationPass() { return new PRE(); }
 // Entry point for the overall PartialRedundancyElimination function pass.
 // This function is provided to you.
 
+bool PRE::isPartiallyRedundant(term_t &term) {
+  return true;
+}
+
 std::set<term_t> PRE::getPartiallyRedundantExpressions(Function &F) {
   std::set<term_t> partiallyRedundant;
 
@@ -144,6 +149,9 @@ std::set<term_t> PRE::getPartiallyRedundantExpressions(Function &F) {
     }
   }
   DEBUG(dbgs() << "#done: " << partiallyRedundant.size() << "\n");
+
+
+
   return partiallyRedundant;
 }
 
@@ -197,7 +205,8 @@ bool PRE::Transp(Instruction &inst, term_t term) {
 
   StoreInst* storeInst = dyn_cast<StoreInst>(&inst);
   if (storeInst) {
-    if (storeInst->getOperand(0) == operand1 || storeInst->getOperand(1) == operand2) {
+    if (storeInst->getOperand(1) == operand1 ||   storeInst->getOperand(1) == operand2
+  ) {
       return false;
     } else {
       return true;
@@ -565,7 +574,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
     bool delay = mem_delay[inst];
     bool latest = mem_latest[inst];
     bool isolated = mem_isolated[inst];
-    DEBUG(dbgs() << "    " << *inst << " | dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
+    DEBUG(dbgs() << "    " << *inst << " | transp: " << Transp(*inst, term) << " used: " << Used(*inst, term) << " dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
   }
 
   std::set<Instruction*> OCP = getOCP(F, term);

@@ -5,6 +5,7 @@ int main() {
   int b = 2;
   int t1;
   if (a) {
+    a = 3;
     t1 = a + b;
   } else {
     int c = 1;
