@@ -64,7 +64,7 @@ namespace {
     Instruction* endNode;
 
     bool isPartiallyRedundant(term_t &term);
-    std::set<term_t> getPartiallyRedundantExpressions(Function &F);
+    std::set<term_t> getTerms(Function &F);
     Value* getAlloca(Value* val);
     Instruction* getStartNode(Function &F);
     Instruction* getEndNode(Function &F);
@@ -122,8 +122,8 @@ bool PRE::isPartiallyRedundant(term_t &term) {
   return true;
 }
 
-std::set<term_t> PRE::getPartiallyRedundantExpressions(Function &F) {
-  std::set<term_t> partiallyRedundant;
+std::set<term_t> PRE::getTerms(Function &F) {
+  std::set<term_t> terms;
 
   // http://llvm.org/docs/ProgrammersManual.html#iterating-over-the-instruction-in-a-function
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
@@ -143,16 +143,14 @@ std::set<term_t> PRE::getPartiallyRedundantExpressions(Function &F) {
       Value* alloca2 = getAlloca(operand2);
       if (alloca1 && alloca2) {
         term_t term = makeTerm(alloca1, inst->getOpcode(), alloca2, inst->getType());
-        partiallyRedundant.insert(term);
+        terms.insert(term);
       }
     } else {
     }
   }
-  DEBUG(dbgs() << "#done: " << partiallyRedundant.size() << "\n");
+  DEBUG(dbgs() << "#done: " << terms.size() << "\n");
 
-
-
-  return partiallyRedundant;
+  return terms;
 }
 
 Instruction* PRE::getStartNode(Function &F) {
@@ -667,7 +665,7 @@ bool PRE::runOnFunction(Function &F) {
   DEBUG(dbgs() << "#### PRE ####\n");
 
   // for test
-  std::set<term_t> terms = getPartiallyRedundantExpressions(F);
+  std::set<term_t> terms = getTerms(F);
   for (auto term : terms) {
     if(perform_OCP_RO_Transformation(F, term)) {
       Changed = true;
