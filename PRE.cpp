@@ -168,10 +168,10 @@ Instruction* PRE::getEndNode(Function &F) {
 
 Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
-  Constant* constInst = dyn_cast<Constant>(val);
+
   if (loadInst) {
     return dyn_cast<Value>(loadInst->getOperand(0));
-  } else if (constInst) {
+  } else if (isa<Constant>(val) || isa<Argument>(val)) {
     return val;
   } else {
     return NULL;
@@ -635,7 +635,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           // DEBUG(dbgs() << "remove operands " << numOperands << "\n");
           for (unsigned i = 0; i < numOperands; i++) {
             Value *operandToBeRemoved = inst->getOperand(i);
-            if (!isa<Constant>(operandToBeRemoved)) {
+            if (!(isa<Constant>(operandToBeRemoved) || isa<Argument>(operandToBeRemoved))) {
               dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
             }
             // DEBUG(dbgs() << *operandToBeRemoved << "\n");
