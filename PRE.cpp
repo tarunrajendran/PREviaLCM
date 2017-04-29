@@ -170,6 +170,7 @@ Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
 
   if (loadInst) {
+    if (isa<GetElementPtrInst>(loadInst->getOperand(0))) return NULL; // ignore getelementptr
     return dyn_cast<Value>(loadInst->getOperand(0));
   } else if (isa<Constant>(val) || isa<Argument>(val)) {
     return val;
@@ -566,7 +567,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   getIsolateds(F, term);
   DEBUG(dbgs() << "Done gettings sets\n");
 
-
+  /*
   DEBUG(dbgs() << "#Stats\n");
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *inst = &*I;
@@ -575,8 +576,9 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
     bool delay = mem_delay[inst];
     bool latest = mem_latest[inst];
     bool isolated = mem_isolated[inst];
-  //  DEBUG(dbgs() << "    " << *inst << " | transp: " << Transp(*inst, term) << " used: " << Used(*inst, term) << " dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
+    DEBUG(dbgs() << "    " << *inst << " | transp: " << Transp(*inst, term) << " used: " << Used(*inst, term) << " dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
   }
+  */
 
   std::set<Instruction*> OCP = getOCP(F, term);
   std::set<Instruction*> RO = getRO(F, term);
@@ -609,15 +611,17 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
           // insert instruction
           Value* loadInst1 = term_operand1(term);
           Value* loadInst2 = term_operand2(term);
-          if (isa<AllocaInst>(loadInst1)) {
+          // if (isa<AllocaInst>(loadInst1) || isa<GetElementPtrInst>(loadInst1)) {
+          if (loadInst1->getType()->isPointerTy()) {
             loadInst1 = dyn_cast<Value>(new LoadInst(loadInst1, Twine(), inst));
           }
-          if (isa<AllocaInst>(loadInst2)) {
+          // if (isa<AllocaInst>(loadInst2)  || isa<GetElementPtrInst>(loadInst2)) {
+          if (loadInst2->getType()->isPointerTy()) {
             loadInst2 = dyn_cast<Value>(new LoadInst(loadInst2, Twine(), inst));
           }
-          DEBUG(dbgs() << "#insert h\n");
-          DEBUG(dbgs() << *loadInst1 << "\n");
-          DEBUG(dbgs() << *loadInst2 << "\n");
+          DEBUG(dbgs() << "#insert\n");
+          DEBUG(dbgs() << *loadInst1 << " " << *(loadInst1->getType()) << "\n");
+          DEBUG(dbgs() << *loadInst2 << " " << *(loadInst2->getType()) <<  "\n");
 
           Value* binaryOperator = dyn_cast<Value>(BinaryOperator::Create((Instruction::BinaryOps)(term_opcode(term)), loadInst1, loadInst2, Twine(), inst));
           (void)dyn_cast<Value>(new StoreInst(binaryOperator, allocaInst, inst));
