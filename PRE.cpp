@@ -565,9 +565,9 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   DEBUG(dbgs() << "Done gettings sets\n");
 
   DEBUG(dbgs() << "#Stats\n");
-  for (auto &dsafe_pair : mem_dsafe) {
-    Instruction* inst = dsafe_pair.first;
-    bool dsafe = dsafe_pair.second;
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    Instruction *inst = &*I;
+    bool dsafe = mem_dsafe[inst];
     bool earliest = mem_earliest[inst];
     bool delay = mem_delay[inst];
     bool latest = mem_latest[inst];
