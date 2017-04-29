@@ -128,13 +128,13 @@ std::set<term_t> PRE::getTerms(Function &F) {
   // http://llvm.org/docs/ProgrammersManual.html#iterating-over-the-instruction-in-a-function
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     Instruction *inst = &*I;
-    DEBUG(dbgs() << "#inst: " << *inst << "\n");
+  //  DEBUG(dbgs() << "#inst: " << *inst << "\n");
     if (inst->isBinaryOp()) { //
       DEBUG(dbgs() << "#binary inst: " << *inst << "\n");
-      DEBUG(dbgs() << "  #operands: " << inst->getNumOperands() << "\n");
-      DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(0)) << "\n");
-      DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(1)) << "\n");
-      DEBUG(dbgs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
+    //  DEBUG(dbgs() << "  #operands: " << inst->getNumOperands() << "\n");
+    //  DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(0)) << "\n");
+    //  DEBUG(dbgs() << "  #operand: " << *(inst->getOperand(1)) << "\n");
+    //  DEBUG(dbgs() << "  #opcode: " << *(inst->getOpcodeName()) << "\n");
 
       // Term *term = new Term(inst->getOperand(0), inst->getOpcode(), inst->getOperand(1));
       Value* operand1 = inst->getOperand(0);
@@ -148,7 +148,7 @@ std::set<term_t> PRE::getTerms(Function &F) {
     } else {
     }
   }
-  DEBUG(dbgs() << "#done: " << terms.size() << "\n");
+  DEBUG(dbgs() << "#done: //Total Number of Binary Operations: " << terms.size() << "\n");
 
   return terms;
 }
@@ -548,23 +548,25 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
 
 bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   bool Changed = false;
-  DEBUG(dbgs() << "#perform_OCP_RO_Transformation\n");
+  Value* termVal1 = term_operand1(term);
+  Value* termVal2 = term_operand2(term);
+  DEBUG(dbgs() << "#perform_OCP_RO_Transformation Val1: " << *termVal1 << " Val2: " << *termVal2 << "\n");
   startNode = getStartNode(F);
   endNode = getEndNode(F);
-  DEBUG(dbgs() << "end node: " << *endNode << "\n");
-  DEBUG(dbgs() << "Begin getDSafes\n");
+ // DEBUG(dbgs() << "end node: " << *endNode << "\n");
+//  DEBUG(dbgs() << "Begin getDSafes\n");
   getDSafes(F, term);
-  DEBUG(dbgs() << "Begin getEarliests\n");
+//  DEBUG(dbgs() << "Begin getEarliests\n");
   getEarliests(F, term);
-  DEBUG(dbgs() << "Begin getDelays\n");
+ // DEBUG(dbgs() << "Begin getDelays\n");
   getDelays(F, term);
-  DEBUG(dbgs() << "Begin getLatests\n");
+ // DEBUG(dbgs() << "Begin getLatests\n");
   getLatests(F, term);
-  DEBUG(dbgs() << "Begin getIsolateds\n");
+ // DEBUG(dbgs() << "Begin getIsolateds\n");
   getIsolateds(F, term);
   DEBUG(dbgs() << "Done gettings sets\n");
 
-  DEBUG(dbgs() << "#Stats\n");
+//  DEBUG(dbgs() << "#Stats\n");
   for (auto &dsafe_pair : mem_dsafe) {
     Instruction* inst = dsafe_pair.first;
     bool dsafe = dsafe_pair.second;
@@ -572,7 +574,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
     bool delay = mem_delay[inst];
     bool latest = mem_latest[inst];
     bool isolated = mem_isolated[inst];
-    DEBUG(dbgs() << "    " << *inst << " | transp: " << Transp(*inst, term) << " used: " << Used(*inst, term) << " dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
+  //  DEBUG(dbgs() << "    " << *inst << " | transp: " << Transp(*inst, term) << " used: " << Used(*inst, term) << " dsafe: " << dsafe << ", earliest: " << earliest << ", delay: " << delay << ", latest: " << latest << ", isolated: " << isolated << "\n");
   }
 
   std::set<Instruction*> OCP = getOCP(F, term);
@@ -650,10 +652,10 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   }
 
   DEBUG(dbgs() << "\n#Done perform_OCP_RO_Transformation\n");
-  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    Instruction *inst = &*I;
-    DEBUG(dbgs() << *inst << "\n");
-  }
+  //for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    //Instruction *inst = &*I;
+  //  DEBUG(dbgs() << *inst << "\n");
+  //}
 
   return Changed;
 }
