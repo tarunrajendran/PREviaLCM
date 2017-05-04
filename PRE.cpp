@@ -170,7 +170,7 @@ Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
 
   if (loadInst) {
-    if (isa<AllocaInst>(loadInst->getOperand(0))/* || isa<GlobalValue>(loadInst->getOperand(0))*/) {
+    if (isa<AllocaInst>(loadInst->getOperand(0)) || isa<GlobalValue>(loadInst->getOperand(0))) {
       return dyn_cast<Value>(loadInst->getOperand(0));
     } else {
       return NULL;
@@ -210,6 +210,7 @@ bool PRE::Transp(Instruction &inst, term_t term) {
   Value* operand2 = term_operand2(term);
 
   StoreInst* storeInst = dyn_cast<StoreInst>(&inst);
+  CallInst* callInst = dyn_cast<CallInst>(&inst);
   if (storeInst) {
     if (storeInst->getOperand(1) == operand1 ||   storeInst->getOperand(1) == operand2
   ) {
@@ -217,6 +218,14 @@ bool PRE::Transp(Instruction &inst, term_t term) {
     } else {
       return true;
     }
+  } else if (callInst) { // if in argument list, then not transparent
+    for (auto it = callInst->arg_begin(), et = callInst->arg_end(); it != et; it++ ) {
+      Value *val = dyn_cast<Value>(it);
+      if (val == operand1 || val == operand2) {
+        return false;
+      }
+    }
+    return true;
   } else {
     return true;
   }
