@@ -1,9 +1,13 @@
-int main() {
-  int a = 1;
-  int b = 2;
-  int t1;
-  if (a) {
-    t1 = a + b;
+
+int test(int a, int b) {
+  int i = 0;
+  while (i < 10) {
+    i += 1;
+    a += 1;
+    int t = a + b;
   }
-  return t1;
+}
+
+int main() {
+  return test(1, 2);
 }

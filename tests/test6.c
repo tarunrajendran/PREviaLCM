@@ -2,8 +2,6 @@ int test(int a, int b) {
   int t1;
   if (a) {
     t1 = a + b;
-  } else {
-    int c = 1;
   }
   int t3 = a + b;
   return t3;

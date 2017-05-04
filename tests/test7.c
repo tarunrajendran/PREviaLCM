@@ -1,9 +1,13 @@
-int main() {
-	int i;
-	while (i) {
-		i=1;
-		while (i) {
-			i=i+1;
-		}
-	}
+#include <stdio.h>
+float test(float a, float b) {
+  float t1;
+  if (a) {
+    t1 = a + b;
+  }
+  float t3 = a + b;
+  return t3;
+}
+
+float main() {
+   printf("%f\n", test(1.5, 2.3));
 }
