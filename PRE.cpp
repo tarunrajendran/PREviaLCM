@@ -170,8 +170,15 @@ Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
 
   if (loadInst) {
+    if (isa<AllocaInst>(loadInst->getOperand(0))/* || isa<GlobalValue>(loadInst->getOperand(0))*/) {
+      return dyn_cast<Value>(loadInst->getOperand(0));
+    } else {
+      return NULL;
+    }
+    /*
     if (isa<GetElementPtrInst>(loadInst->getOperand(0))) return NULL; // ignore getelementptr
     return dyn_cast<Value>(loadInst->getOperand(0));
+    */
   } else if (isa<Constant>(val) || isa<Argument>(val)) {
     return val;
   } else {
@@ -549,9 +556,9 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
 
 bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   bool Changed = false;
-  Value* termVal1 = term_operand1(term);
-  Value* termVal2 = term_operand2(term);
-  DEBUG(dbgs() << "#perform_OCP_RO_Transformation Val1: " << *termVal1 << " Val2: " << *termVal2 << "\n");
+  // Value* termVal1 = term_operand1(term);
+  // Value* termVal2 = term_operand2(term);
+  // DEBUG(dbgs() << "#perform_OCP_RO_Transformation Val1: " << *termVal1 << " Val2: " << *termVal2 << "\n");
   startNode = getStartNode(F);
   endNode = getEndNode(F);
  // DEBUG(dbgs() << "end node: " << *endNode << "\n");
@@ -565,7 +572,7 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   getLatests(F, term);
  // DEBUG(dbgs() << "Begin getIsolateds\n");
   getIsolateds(F, term);
-  DEBUG(dbgs() << "Done gettings sets\n");
+  // DEBUG(dbgs() << "Done gettings sets\n");
 
   /*
   DEBUG(dbgs() << "#Stats\n");
@@ -637,16 +644,18 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
 
           ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
 
+          /*
           // erase all operands of inst
           unsigned numOperands = inst->getNumOperands();
           // DEBUG(dbgs() << "remove operands " << numOperands << "\n");
           for (unsigned i = 0; i < numOperands; i++) {
             Value *operandToBeRemoved = inst->getOperand(i);
-            if (!(isa<Constant>(operandToBeRemoved) || isa<Argument>(operandToBeRemoved))) {
+            if (operandToBeRemoved->getType()->isPointerTy()) {
               dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
             }
             // DEBUG(dbgs() << *operandToBeRemoved << "\n");
           }
+          */
 
           // DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
           it = --nextIt;
