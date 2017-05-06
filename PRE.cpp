@@ -221,7 +221,8 @@ bool PRE::Transp(Instruction &inst, term_t term) {
   } else if (callInst) { // if in argument list, then not transparent
     for (auto it = callInst->arg_begin(), et = callInst->arg_end(); it != et; it++ ) {
       Value *val = dyn_cast<Value>(it);
-      if (val == operand1 || val == operand2) {
+      if (val->getType()->isPointerTy() && // test12.c
+          (val == operand1 || val == operand2)) {
         return false;
       }
     }
