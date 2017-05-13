@@ -118,10 +118,6 @@ FunctionPass *createPartialRedundancyEliminationPass() { return new PRE(); }
 // Entry point for the overall PartialRedundancyElimination function pass.
 // This function is provided to you.
 
-bool PRE::isPartiallyRedundant(term_t &term) {
-  return true;
-}
-
 std::set<term_t> PRE::getTerms(Function &F) {
   std::set<term_t> terms;
 
