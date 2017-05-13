@@ -6,12 +6,5 @@
 ```
 add_subdirectory(PREviaLCM)
 ```
+3. Build
 
-
-## Procedures
-1. Get all terms `T`.
-2. Get all variables `V`.
-3. Get Partial Redundant Expressions. Get `T'`
-4. Calculate D-Safe for each expression (term)
-5. Calculate Earliest for each expression (term)
-6. Perform the Safe-Earliest Transformation
