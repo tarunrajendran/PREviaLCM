@@ -55,15 +55,16 @@ namespace {
     // Entry point for the overall pre pass
     bool runOnFunction(Function &F);
 
+    // For memoization
     std::map<Instruction*, bool> mem_dsafe;
     std::map<Instruction*, bool> mem_earliest;
     std::map<Instruction*, bool> mem_delay;
     std::map<Instruction*, bool> mem_latest;
     std::map<Instruction*, bool> mem_isolated;
+
     Instruction* startNode;
     Instruction* endNode;
 
-    bool isPartiallyRedundant(term_t &term);
     std::set<term_t> getTerms(Function &F);
     Value* getAlloca(Value* val);
     Instruction* getStartNode(Function &F);
@@ -75,7 +76,6 @@ namespace {
     bool Delay(Instruction &inst, term_t term);
     bool Latest(Instruction &inst, term_t term);
     bool Isolated(Instruction &inst, term_t term);
-    Instruction* getBinarySuccessor(Instruction *inst);
     std::set<Instruction*> getSuccessors(Instruction *inst);
     std::set<Instruction*> getPredecessors(Instruction *inst);
     void getDSafes(Function &F, term_t term);
@@ -110,14 +110,10 @@ static RegisterPass<PRE> X("pre",
 FunctionPass *createPartialRedundancyEliminationPass() { return new PRE(); }
 
 
-//===----------------------------------------------------------------------===//
-//                      SKELETON FUNCTION TO BE IMPLEMENTED
-//===----------------------------------------------------------------------===//
-//
-// Function runOnFunction:
-// Entry point for the overall PartialRedundancyElimination function pass.
-// This function is provided to you.
 
+/**
+ * Get a set of all terms that are binary operations.
+ */
 std::set<term_t> PRE::getTerms(Function &F) {
   std::set<term_t> terms;
 
@@ -149,6 +145,9 @@ std::set<term_t> PRE::getTerms(Function &F) {
   return terms;
 }
 
+/**
+ * Get the first instruction.
+ */
 Instruction* PRE::getStartNode(Function &F) {
   ReversePostOrderTraversal<Function *> RPOT(&F);
   BasicBlock *bb = *(RPOT.begin());
@@ -156,12 +155,19 @@ Instruction* PRE::getStartNode(Function &F) {
   return inst;
 }
 
+/**
+ * Get the last instruction.
+ */
 Instruction* PRE::getEndNode(Function &F) {
   BasicBlock *bb = *(po_begin(&F.getEntryBlock()));
   Instruction *inst = &*(bb->rbegin());
   return inst;
 }
 
+/**
+ * Validate an operand.
+ * If the operand is invalid, return NULL.
+ */
 Value* PRE::getAlloca(Value* val) {
   LoadInst* loadInst = dyn_cast<LoadInst>(val);
 
@@ -171,10 +177,6 @@ Value* PRE::getAlloca(Value* val) {
     } else {
       return NULL;
     }
-    /*
-    if (isa<GetElementPtrInst>(loadInst->getOperand(0))) return NULL; // ignore getelementptr
-    return dyn_cast<Value>(loadInst->getOperand(0));
-    */
   } else if (isa<Constant>(val) || isa<Argument>(val)) {
     return val;
   } else {
@@ -182,7 +184,10 @@ Value* PRE::getAlloca(Value* val) {
   }
 }
 
-
+/**
+ * Check if an instruction `inst` is Used
+ * based on `term`.
+ */
 bool PRE::Used(Instruction &inst, term_t term) {
   // compare two operands and opcode
   if (inst.isBinaryOp()) {
@@ -201,13 +206,17 @@ bool PRE::Used(Instruction &inst, term_t term) {
   }
 }
 
+/**
+ * Check if an instruction `inst` is Transp
+ * based on `term`.
+ */
 bool PRE::Transp(Instruction &inst, term_t term) {
   Value* operand1 = term_operand1(term);
   Value* operand2 = term_operand2(term);
 
   StoreInst* storeInst = dyn_cast<StoreInst>(&inst);
   CallInst* callInst = dyn_cast<CallInst>(&inst);
-  if (storeInst) {
+  if (storeInst) { // check if operand1 and operand2 are modified.
     if (storeInst->getOperand(1) == operand1 ||   storeInst->getOperand(1) == operand2
   ) {
       return false;
@@ -228,7 +237,10 @@ bool PRE::Transp(Instruction &inst, term_t term) {
   }
 }
 
-// return changed or not.
+/**
+ * Calculate D-Safe
+ * return changed or not.
+ */
 bool PRE::DSafe(Instruction &inst, term_t term) {
   // DEBUG(dbgs() << "DSafe: " << inst << "\n");
   bool dsafe = false;
@@ -260,6 +272,10 @@ bool PRE::DSafe(Instruction &inst, term_t term) {
   }
 }
 
+/**
+ * Calculate Earliest
+ * return changed or not.
+ */
 bool PRE::Earliest(Instruction &inst, term_t term) {
   bool earliest = false;
   if (startNode == &inst) { // if n == s
@@ -289,6 +305,10 @@ bool PRE::Earliest(Instruction &inst, term_t term) {
   }
 }
 
+/**
+ * Calculate Delay
+ * return changed or not.
+ */
 bool PRE::Delay(Instruction &inst, term_t term) {
   bool delay = false;
   if (mem_dsafe[&inst] && mem_earliest[&inst]) {
@@ -319,6 +339,10 @@ bool PRE::Delay(Instruction &inst, term_t term) {
   }
 }
 
+/**
+ * Calculate Latest
+ * return changed or not.
+ */
 bool PRE::Latest(Instruction &inst, term_t term) {
   bool latest = true;
   if (!mem_delay[&inst]) {
@@ -348,6 +372,10 @@ bool PRE::Latest(Instruction &inst, term_t term) {
   }
 }
 
+/**
+ * Calculate Isolated
+ * return changed or not.
+ */
 bool PRE::Isolated(Instruction &inst, term_t term) {
   bool isolated = true;
   std::set<Instruction*> successors = getSuccessors(&inst);
@@ -372,39 +400,14 @@ bool PRE::Isolated(Instruction &inst, term_t term) {
   }
 }
 
-
-
-Instruction* PRE::getBinarySuccessor(Instruction *inst) {
-  BasicBlock *parent = inst->getParent();
-  bool findSelf = false;
-  for (auto I = parent->begin(), E = parent->end(); I != E; ++I) {
-    Instruction *i = &*I;
-    if (i == inst) {
-      findSelf = true;
-      continue;
-    }
-    if (findSelf && i->isBinaryOp()) {
-      return i;
-    }
-  }
-  return NULL; // no successor found
-}
-
-
+/**
+ * Get a set of successors of instruction `inst`.
+ */
 std::set<Instruction*> PRE::getSuccessors(Instruction *inst) {
   std::set<Instruction*> successorsSet;
 
   BasicBlock *parent = inst->getParent();
   if (&(parent->back()) == inst) {   // the end of basic block
-    /*
-    TerminatorInst *termInst = parent->getTerminator();
-    unsigned numSuccessors = termInst->getNumSuccessors();
-    for (unsigned i = 0; i < numSuccessors; i++) {
-      BasicBlock *successorBB = termInst->getSuccessor(i);
-      Instruction *firstInst = &*(successorBB->begin());
-      successorsSet.insert(firstInst);
-    }
-    */
     for (auto it : successors(parent)) {
       BasicBlock* bb = &*it;
       successorsSet.insert(&(bb->front()));
@@ -423,6 +426,9 @@ std::set<Instruction*> PRE::getSuccessors(Instruction *inst) {
   return successorsSet;
 }
 
+/**
+ * Get a set of predecessors of instruction `inst`.
+ */
 std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
   std::set<Instruction*> predecessorsSet;
 
@@ -445,7 +451,10 @@ std::set<Instruction*> PRE::getPredecessors(Instruction *inst) {
   return predecessorsSet;
 }
 
-// backwards
+/**
+ * Calculate D-Safe for all instructions based on term.
+ * Save all results to mem_dsafe.
+ */
 void PRE::getDSafes(Function &F, term_t term) {
   mem_dsafe.clear();
   bool changed = true;
@@ -463,7 +472,10 @@ void PRE::getDSafes(Function &F, term_t term) {
   }
 }
 
-// forwards
+/**
+ * Calculate Earliest for all instructions based on term.
+ * Save all results to mem_earliest.
+ */
 void PRE::getEarliests(Function &F, term_t term) {
   mem_earliest.clear();
   bool changed = true;
@@ -482,6 +494,10 @@ void PRE::getEarliests(Function &F, term_t term) {
   }
 }
 
+/**
+ * Calculate Delay for all instructions based on term.
+ * Save all results to mem_delay.
+ */
 void PRE::getDelays(Function &F, term_t term) {
   mem_delay.clear();
   bool changed = true;
@@ -500,6 +516,10 @@ void PRE::getDelays(Function &F, term_t term) {
   }
 }
 
+/**
+ * Calculate Latest for all instructions based on term.
+ * Save all results to mem_latest.
+ */
 void PRE::getLatests(Function &F, term_t term) {
   mem_latest.clear();
   bool changed = true;
@@ -517,6 +537,10 @@ void PRE::getLatests(Function &F, term_t term) {
   }
 }
 
+/**
+ * Calculate Isolated for all instructions based on term.
+ * Save all results to mem_isolated.
+ */
 void PRE::getIsolateds(Function &F, term_t term) {
   mem_isolated.clear();
   bool changed = true;
@@ -534,6 +558,9 @@ void PRE::getIsolateds(Function &F, term_t term) {
   }
 }
 
+/**
+ * Calculate Optimal Conditional Points (OCP)
+ */
 std::set<Instruction*> PRE::getOCP(Function &F, term_t term) {
   std::set<Instruction*> OCP;
 
@@ -547,6 +574,9 @@ std::set<Instruction*> PRE::getOCP(Function &F, term_t term) {
   return OCP;
 }
 
+/**
+ * Calculate Redundant Occurrences (RO)
+ */
 std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
   std::set<Instruction*> RO;
 
@@ -560,6 +590,9 @@ std::set<Instruction*> PRE::getRO(Function &F, term_t term) {
   return RO;
 }
 
+/**
+ * Perform OCP-RO Transformation
+ */
 bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
   bool Changed = false;
   // Value* termVal1 = term_operand1(term);
@@ -650,21 +683,8 @@ bool PRE::perform_OCP_RO_Transformation(Function &F, term_t term) {
 
           ReplaceInstWithInst(inst, loadInst); // replace with load instruction.
 
-          /*
-          // erase all operands of inst
-          unsigned numOperands = inst->getNumOperands();
-          // DEBUG(dbgs() << "remove operands " << numOperands << "\n");
-          for (unsigned i = 0; i < numOperands; i++) {
-            Value *operandToBeRemoved = inst->getOperand(i);
-            if (operandToBeRemoved->getType()->isPointerTy()) {
-              dyn_cast<Instruction>(operandToBeRemoved)->eraseFromParent();
-            }
-            // DEBUG(dbgs() << *operandToBeRemoved << "\n");
-          }
-          */
-
           // DEBUG(dbgs() << "    done replacing" << *loadInst << "\n");
-          it = --nextIt;
+          it = --nextIt; // restore it.
           NumInstReplaced++;
         }
       }
