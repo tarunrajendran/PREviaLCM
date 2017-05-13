@@ -1,31 +1,328 @@
 \documentclass[onecolumn,10pt]{journal}
 \usepackage{fullpage}
-\renewcommand{\baselinestretch}{2}
+\usepackage{amsmath,parskip}
+\setlength{\parskip}{5pt}
+\setlength\parindent{0pt}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{subfig}
+
+
+
+\usepackage{listings}
+\usepackage{color}
+
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+
+\lstset{ %
+  backgroundcolor=\color{white},   % choose the background color
+  basicstyle=\footnotesize,        % size of fonts used for the code
+  breaklines=true,                 % automatic line breaking only at whitespace
+  captionpos=b,                    % sets the caption-position to bottom
+  commentstyle=\color{mygreen},    % comment style
+  escapeinside={\%*}{*)},          % if you want to add LaTeX within your code
+  keywordstyle=\color{blue},       % keyword style
+  stringstyle=\color{mymauve},     % string literal style
+}
+
+
+
 \author{Tarun Rajendran and Yiyi Wang}
 \title{Partial Redundancy Elimination via Lazy Code Motion}
 \begin{document}
 \maketitle
 
-\section*{Problem Statement}
+\section{Problem Statement \& Motivation}
+\indent Partial Redundancy Elimination is a well used transformation to optimize code. A very powerful optimization technique, Partial Redundancy Elimination (PRE) seeks to identify partially redundant expressions and makes them fully redundant, creating more opportunities for optimizations such as Common Subexpression Elimination (CSE) and Loop Invariant Code Motion (LICM).
+    
+    The requirements for identifying partially redundant expressions is very strict, and can limit the opportunities for PRE. Briggs and Cooper [2] explains that more opportunities can be created to identify  partial redundancy by first transforming the code with Global Reassociation and Global Value Numbering (GVN). 
 
-Partial Redundancy Elimination is a well used transformation to optimize code. While a powerful optimization by itself, previous naive implementations have had limitations and small benefit. Amongst the various implementations of Partial Redundancy Elimination, this implementations seeks to improve the effectiveness of current partial redundancy elimination techniques. Improvement to this fundamental algorithm may yield interesting results and lead to future work in this area. \\Not Done
+  Another traditional drawback to PRE is the increased amount of memory bandwidth, and register pressure. Adopting Lazy Code Motion techniques, from Knoop et al. [4], allows us to alleviate these issues and allows us to have a powerful algorithm while still maintaining performance. We believed that combining the ideas in these papers may lead to significant improvement to this fundamental optimization algorithm and may yield interesting results to guide future work in this area.
 
-\section*{Existing Work}
+\section{Existing Work}
 
-\section*{Algorithm Overview}
+\noindent\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{Effective Partial Redundancy Elimination [2]}
 
-\section*{Implementation Details}
+\noindent This paper showcases the value of performing Global Reassociation and Global Value Numbering before performing Partial Redundancy Elimination. It shows off the increased performance effects of PRE and illustrates the new opportunities that performing these passes create for PRE. It also introduces an new implementation of Global Reassociation to create new opportunities for PRE. 
 
-\section*{Experimental Results}
+\noindent\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{Lazy Code Motion [4]}
 
-\section*{References}
+\noindent This paper contributes an unidirectional iterative data flow algorithm for performing PRE. We base our PRE implementation off of this algorithm. This algorithm allows us to efficiently and lazily perform PRE, which gives us the benefit of reduced code motion and register pressure.
 
-\section*{Appendix}
+\noindent\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{A New Algorithm for Partial Redundancy Elimination based on SSA Form [1]}
 
-\section*{Running Instructions}
+\noindent In contrast to the traditional bitvector algorithm for performing PRE, Chow et al. [1] introduces a new SSA PRE transformation pass which seeks to increase opportunities of PRE and while avoiding iterative data flow analysis. It also adopts similar and independently implemented lazy code motions techniques from Knoop et al [4]. Notably this implementation avoids a separate phase for data flow analysis to gather information about the expressions in the program, something that our implementation is forced to perform.
 
-\section*{Example}
+\pagebreak
+
+\noindent\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{GVN in LLVM}
+
+\noindent The GVN algorithm in LLVM is closely coupled with its own PRE transformation and dead load elimination passes, and performs PRE in its transformation pass. This algorithm also seems to be an iterative bit vector algorithm which transforms the code after performing GVN. The Dead Load elimination pass helps clean up the increased code size that PRE creates. 
+
+\section{Algorithm Overview}
+
+Before our algorithm runs, we perform Global Reassociation and Global Value Numbering (SSA) before Lazy Code Motion [4] to help increase the opportunities for eliminating partially redundant expressions in the code. Next we perform an algorithm very similar to lazy code motion to eliminate partially redundant expressions. 
+
+  To begin our algorithm, we need to identify the set of terms to perform our transformation on. We look through all Binary Operations and create a term WorkList. We define a term to be of two operands and one binary operator. These operands in the term must be a local variable, global variables, constant, or function argument. Then we analyze all of the terms in the WorkList one by one. 
+
+  For each term, we perform iterative dataflow analysis to calculate the \texttt{D-Safe}, \texttt{Earliest}, \texttt{Delay}, \texttt{Latest}, and \texttt{Isolated} sets to be able to determine the \texttt{Optimal Conditional Points (OCP)} and \texttt{Redundant Occurrences (RO)} sets. In order to be comprehensive, we must perform multiple iterations to guarantee correctness. This is to ensure the analysis is correct even when there is a backedge in the code. Therefore we iterate until the appropriate set does not change, is should be \textit{N}-1 times, \textit{N} being the number of back edges in the code. 
+
+  Once we have calculated the \texttt{OCP} and \texttt{RO} sets, we can then perform the \texttt{OCP-RO Transformation} detailed by Knoop et al. [4]. We first introduce a new auxiliary variable to replace the computation of the term. We insert the assigned aux variable at the Optimal Conditional Point to store the result of computation of the term. Performing the computation and storing it into a auxiliary variable, is how we maintain laziness. Finally, we replace each Redundant Occurrence with the auxiliary variable.
+    
+    We then perform this algorithm on the rest of the WorkList until it is empty.
+\begin{figure}[!b] 
+\includegraphics[scale=0.4]{LCM}
+\caption{The general flow of the algorithm}
+\end{figure}
+
+\pagebreak
+
+\section{Implementation Details}
+The LLVM \texttt{reassociation} pass works properly, so we just used it directly.  
+
+We tried to use the existing \texttt{gvn} pass from LLVM, but that \texttt{gvn} pass already performs \texttt{pre} and a lot of other eliminations such as dead load elimination, therefore we decided not to use the \texttt{gvn} pass. We discovered a new GVN transformation in LLVM 4.0 called \texttt{new-gvn}. The \texttt{new-gvn} pass uses a sparse formulation based on the ideas of Karthik Gargi [3]. Most importantly it does not have its own PRE algorithm.
+
+After finish performing the \texttt{reassociation} pass and \texttt{new-gvn} pass, we continue to retrieve a set of \texttt{terms}. A \texttt{term} stores two operands and one operator. The \texttt{terms} can be easily got by checking if an instruction is of \texttt{BinaryOperator} type. The operand in a term must be a local variable, global variables, constant, or function argument. Since we only consider Scalar expressions, we do not consider \texttt{gep} instructions loaded from a struct or array. 
+
+Once we get the \texttt{terms} set. We start analyzing them one by one. We define four helper functions \texttt{Used}, \texttt{Transp}, \texttt{Succ} and \texttt{Pred}:
+\begin{itemize}
+\item \texttt{Used(inst, term)} is true if the \texttt{inst} and \texttt{term} have the same operands and operator.
+\item  \texttt{Transparent(inst, term)} is false if that \texttt{inst} modifies the operand of \texttt{term}. Also if \texttt{inst} is a call instruction and one operand of the \texttt{term} is passed in as argument, then the transparency is also set to false. We did this because we are not able to judge whether the operand passed as parameter will be changed or not in the calling function. For simplicity, we just set the transparency of that case as false.
+\item \texttt{Succ(inst)} returns the successor of \texttt{inst}. If \texttt{inst} is not the last instruction in its basic block, then return the next instruction of \texttt{inst}. Otherwise, return the first instructions of basic blocks that are the successor of the basic block where \texttt{inst} is.   
+\item \texttt{Pred(inst)} returns the predecessor of \texttt{inst}. If \texttt{inst} is not the first instruction in its basic block, then return the previous instruction of \texttt{inst}. Otherwise, return the last instructions of basic blocks that are the predecessor of the basic block where \texttt{inst} is.
+\end{itemize}.
+
+Then for each term, we perform iterative dataflow analysis to calculate the \texttt{D-Safe}, \texttt{Earliest}, \texttt{Delay}, \texttt{Latest}, and \texttt{Isolated} sets. 
+
+At start, we create $mem_{dsafe}, mem_{earliest}, mem_{delay}, mem_{latest}\text{ and } mem_{isolated}$ for memorization. They are \texttt{instruction} and \texttt{boolean} maps that are used to save calculated results and for checking convergence.  
+
+To calculate $D\text{-}Safe$ for each instruction, we follow the definition from \textit{Lazy Code Motion}:
+\newline
+\newline
+$
+D\text{-}Safe(n, term) = 
+\begin{cases}
+false & \text{if } n\text{ is the last instruction.} \\
+\\
+Used(n, term) \bigvee \\
+Transp(n, term) \bigwedge \prod\limits_{m \in Succ(n) \bigwedge m \in mem_{dsafe}}mem_{dsafe}[m] & otherwise
+\end{cases}
+$
+\newline
+
+Once we calculate \texttt{D-Safe} for an instruction $n$, we save the boolean result to $mem_{dsafe}[n]$. We stop calculating \texttt{D-Safe} until $mem_{dsafe}$ doesn't change any more.    
+
+We then continue to calculate \texttt{Earliest}, \texttt{Delay}, \texttt{Latest}, and \texttt{Isolated} in the same way according to the equations defined in \textit{Lazy Code Motion} [4] found in \textbf{Appendix (A)}.  
+
+Next, we compute the \texttt{Optimal Computation Points (OCP)} and \texttt{Redundant Occurrence (RO)} sets: 
+\begin{itemize}
+\item $OCP(term) = \{\ n\ |\ mem_{latest}[n] \bigwedge \neg mem_{isolated}[n] \ \}$
+\item $RO(term) = \{\ n\ |\ Used(n, term) \bigvee \neg ( mem_{latest}[n] \bigwedge mem_{isolated}[n] ) \ \}$
+\end{itemize}
+
+Once we have calculated the \texttt{OCP} and \texttt{RO} sets, we can then perform the \texttt{OCP-RO Transformation}. We first introduce a new auxiliary variable to store the computation of the term. The auxiliary variable in LLVM is a local variable created by an allocation instruction (AllocaInst). We insert the allocation instruction at the very start of function basic block. Then we insert the auxiliary variable before the instructions in Optimal Conditional Point to store the result of computation of the term. Finally, we replace instructions in Redundant Occurrence with auxiliary variable. To do this in LLVM, we replace them with load instructions that load our auxiliary variable.
+
+To test this transformation pass we created twelve unit tests designed to test basic functionality and corner cases involving conditional statements, loops, constants, globals, and function calls. Our final transformation pass correctly passes these test cases.
+
+For our experiment we decided to test three different test cases
+
+\begin{itemize}
+\item Test 1 : \texttt{-reassociate -newgvn} 
+\item Test 2 : \texttt{-reassociate -newgvn -pre}
+\item Test 3 : \texttt{-reassociate -gvn}
+\end{itemize}
+
+Test 1 serves as our control in this experiment, we use this test to base our effectiveness off of. Test 2 utilizes our new PRE transformation pass. Test 3 uses the LLVM GVN transformation pass which performs PRE. Since there is no existing standalone PRE transformation in LLVM, this was the closest to an existing solution to compare our results off of. Using this test to compare to others may not be useful as performance discrepancies may occur due to the different GVN algorithm used in these test in addition the different PRE algorithm. The purpose of this test is to compare our transformation with current implementations. With our test script, we are able to run clang in \texttt{-O0} mode with only the specified passes being run. As a general note we decided to not perform our tests with a large amount of transformation passes, testing with more passes ends up drastically lowering the amount of opportunities for PRE. For example, running SROA drastically lowers the amount of PRE opportunities. We felt that these test cases allows us to maximize the opportunities for PRE in order to properly show the effectiveness of our pass.
+
+To perform this experiment we used the LLVM Test Suite, testing on the SingleSource and MultiSource programs. To test our pass with this test suite, we designed a clang wrapper to wrap clang and opt together in order to control which passes are specifically run during compilation. Our transformation correctly passes all of these test cases, except for 0.01\% of them. This remaining percentage is due to the lack of robustness in our testing infrastructure. Nonetheless we believe that the results are comprehensive and still illustrate the capabilities of our transformation.
+
+\section{Experimental Results}
+
+In our data graphs, we aim to holistically show the results of our tests. The x-axis in the graphs represents the benchmark programs, and y axis the time difference in execution. To further elaborate, in Figure 2 and 3, for any single benchmark the time difference shows us:
+\begin{center}
+\textit{Execution Time of the Benchmark in Test 1} - \textit{Execution Time of the Benchmark in Test 2}
+\end{center}
+In figure 4 and 5, the time difference illustrates:
+\begin{center}
+\textit{Execution Time of the Benchmark in Test 3} - \textit{Execution Time of the Benchmark in Test 2}
+\end{center}
+In both of these tests, positive numbers mean that Test 2, which included our transformation pass, executed faster than the other tests and negative numbers mean that it executed slower.
+
+Figure 4 and 5 can be found in Appendix B.
+
+\noindent\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{Result Analysis}
+
+We expected to see the biggest fluctuations in smaller SingleSource programs as these programs tend to have less \texttt{ROs}. Since we basically add multiple \texttt{load} instructions and a \texttt{store} instruction in place of a computation, we will see slower performance if the computation is used only once or twice in the program. But for the most part, we are glad that our transformation pass is able to meet similar performance for most of the SingleSource Benchmarks. 
+
+The performance of transformation pass is great on the MultiSource programs. A majority of the tests indicate that our transformation pass is able to be slightly faster than our control test. In one of our best benchmarks, we were able to see a 9\% faster performance in the benchmark of a large program such as SQLite3 (from 4.29 seconds to 3.91 seconds).
+
+While we cannot comment on the performance of the PRE algorithms, due to the different GVN algorithms, it is encouraging to see that our PRE algorithm does not seem to drastically hinder performance in the majority of the benchmarks.
+
+In general we are satisfied with the performance of our PRE transformation. While we cannot claim that our algorithm will be able to increase the performance of all applications, we believe that we have demonstrated that there are situations where this transformation is relevant. 
+
+\begin{figure}[t] 
+\centering
+\includegraphics[scale=0.41]{CS_526_SingleSource_Performance.png}
+\caption{}
+\end{figure}
+
+\begin{figure}[t] 
+\centering
+\includegraphics[scale=0.41]{CS_526_Multisource_Performance.png}
+\caption{}
+\end{figure}
+
+\pagebreak
+\section{References}
+
+[1] Fred Chow, Sun Chan, Robert Kennedy, Shin-Ming Liu, Raymond Lo, and Peng Tu. 1997. A new algorithm for partial redundancy elimination based on SSA form. In \textit{Proceedings of the ACM SIGPLAN 1997 conference on Programming language design and implementation} (PLDI '97), A. Michael Berman (Ed.). ACM, New York, NY, USA, 273-286. DOI=http://dx.doi.org/10.1145/258915.258940
+
+[2] Preston Briggs and Keith D. Cooper. 1994. Effective partial redundancy elimination. In \textit{Proceedings of the ACM SIGPLAN 1994 conference on Programming language design and implementation} (PLDI '94). ACM, New York, NY, USA, 159-170. DOI=http://dx.doi.org/10.1145/178243.178257
+
+[3] Karthik Gargi. 2002. A sparse algorithm for predicated global value numbering. In \textit{Proceedings of the ACM SIGPLAN 2002 conference on Programming language design and implementation} (PLDI '02). ACM, New York, NY, USA, 45-56. DOI=http://dx.doi.org/10.1145/512529.512536
+
+[4] Jens Knoop, Oliver Rüthing, and Bernhard Steffen. 1992. Lazy code motion. In \textit{Proceedings of the ACM SIGPLAN 1992 conference on Programming language design and implementation} (PLDI '92), Richard L. Wexelblat (Ed.). ACM, New York, NY, USA, 224-234. DOI=http://dx.doi.org/10.1145/143095.143136
+
+
+
+
+
+
+
+
+
+
+\pagebreak
+\section{Appendix}
+
+\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{(A) D-Safe, Earliest, Delay, Latest, Isolated}
+\begin{itemize}
+\item $
+D\text{-}Safe(n, term) = 
+\begin{cases}
+false & \text{if } n\text{ is the last instruction.} \\
+\\
+Used(n, term) \bigvee \\
+Transp(n, term) \bigwedge \prod\limits_{m \in Succ(n) \bigwedge m \in mem_{dsafe}}mem_{dsafe}[m] & otherwise
+\end{cases}
+$
+
+\item $
+Earliest(n, term) = \begin{cases}
+true & \text{if }n\text{ is the first instruction} \\
+\sum\limits_{m \in Pred(n) \bigwedge m \in mem_{earliest}} \\
+(\ \neg Transp(m, term) \bigvee \\
+\ \ \neg mem_{dsafe}[m] \bigwedge mem_{earliest}[m]\ ) & otherwise
+\end{cases}
+$
+
+\item $Delay(n, term) = mem_{dsafe}[n] \bigwedge mem_{earliest}[n] \bigvee$
+$$\begin{cases}
+false & \text{if }n = s \\
+\prod\limits_{m\in pred(n) \bigwedge m \in mem_{delay}} \neg Used(m, term) \bigwedge mem_{delay}[m] & otherwise
+\end{cases}$$
+
+\item $Latest(n, term) = mem_{delay}[n] \bigwedge (Used(n, term) \bigvee \neg \prod\limits_{m \in Succ(n)} mem_{delay}[m]) $
+
+\item $Isolated(n, term) = \prod\limits_{m \in Succ(n) \bigwedge m \in mem_{isolated}}(mem_{latest}[m] \bigvee (\neg Used(m, term) \bigwedge mem_{isolated}[m])$
+
+
+\end{itemize}
+
+\pagebreak
+
+\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{(B) Test 2 vs Test 3 Graphical Results }
+
+\begin{figure}[h] 
+\centering
+\includegraphics[scale=0.55]{CS_526_GVN_Time_Difference.png}
+\caption{}
+\end{figure}
+
+\begin{figure}[h] 
+\centering
+\includegraphics[scale=0.55]{CS_526_GVN_MS_Time_Diff.png}
+\caption{}
+\end{figure}
+
+\pagebreak
+
+\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{(C) Instructions on how to run}
+\begin{enumerate}
+\item GitHub Clone Link: \texttt{https://github.com/TarunRaj16/PREviaLCM.git}
+
+\item Clone repo into \texttt{lib/Transforms/} in llvm source
+
+\item Add following into \texttt{lib/Transforms/CMakeLists.txt} : \texttt{add\_subdirectory(PREviaLCM)}
+
+\item Build llvm
+
+\item \texttt{-pre} invokes optimization
+
+\item Go to test directory. The tests directory in the project contains unit tests and some LLVM Single Source tests. 
+
+\item Replace \texttt{LLVM\_DIR} and \texttt{PRE\_LIB} to point to LLVM build directory and PRE shared library respectively. The following are some useful commands (replace foo with program you want to test):
+
+\begin{itemize}
+\item \texttt{make foo.ll} : creates an *.ll without our PRE Transformation pass
+\item \texttt{make foo-pre.ll} : creates an *.ll with our PRE Transformation pass
+\item \texttt{make foo.exe} : creates an *.exe without our PRE Transformation pass
+\item \texttt{make foo-pre.exe} : creates an *.exe with our PRE Transformation pass
+\end{itemize}
+
+\end{enumerate}
+\pagebreak
+\titlespacing\subsection*{10pt}{12pt plus 4pt minus 2pt}\textbf{(D) Extended Example}
+\begin{itemize}
+\item  The code below shows that \texttt{a+b} is partially redundant. After calculation, \texttt{OCP} is \{\texttt{5:t1=a+b}, \texttt{7:t1=1}\} and \texttt{RO} is \{\texttt{5:t1=a+b}, \texttt{9:int t2=a+b}\}. We create an auxiliary variable \texttt{h=a+b}. We insert \texttt{h=a+b} before \texttt{5:t1=a+b} and \texttt{7:t1=1}. Then we replace \texttt{5:t1=a+b} and \texttt{9:int t2=a+b} with \texttt{t1=h} and \texttt{t2=h}. Figure 6 shows how the transformation would look like.   
+\begin{lstlisting}[language=c]
+1: int test(int a, int b) {
+2:   int t1 = 0;
+3:   int t2 = 0;
+4:   if (a) {
+5:     t1 = a + b;
+6:   } else {
+7:     t1 = 1;
+8:   }
+9:   int t2 = a + b;
+10:  return t3;
+11: }
+\end{lstlisting}
+
+\begin{figure}[bp!]
+     \centering
+     \subfloat[][without PRE]{\includegraphics[width=0.48\textwidth]{if-before-pre}\label{if1}}
+     \subfloat[][with PRE]{\includegraphics[width=0.48\textwidth]{if-after-pre}\label{if2}}
+     \caption{Comparison of CFG with PRE and without PRE}
+     \label{if}
+\end{figure}
+
+\item The code below demonstrates that loop invariants are partially redundant. After calculation, \texttt{OCP} is \{\texttt{4:while(i<10)}\} and \texttt{RO} is \{\texttt{6:t=a+b}\}. We create an auxiliary variable \texttt{h=a+b}. We insert \texttt{h=a+b} before \texttt{4:while(i<10)}. Then we replace \texttt{6:t=a+b} with \texttt{t=h}. Figure 7 shows how the transformation would look like.     
+\begin{lstlisting}[language=c]
+1: int test(int a, int b) {
+2:   int i = 0;
+3:   int t = 0;
+4:   while (i < 10) {
+5:     i += 1;
+6:     t = a + b;
+7:   }
+8:   return t;
+9: }
+\end{lstlisting}
+
+\begin{figure}[bp!]
+     \centering
+     \subfloat[][without PRE]{\includegraphics[width=0.48\textwidth]{while-before-pre}\label{while1}}
+     \subfloat[][with PRE]{\includegraphics[width=0.48\textwidth]{while-after-pre}\label{while2}}
+     \caption{Comparison of CFG with PRE and without PRE}
+     \label{while}
+\end{figure}
+ 
+\end{itemize}
 
 \end{document}
+
 
 
